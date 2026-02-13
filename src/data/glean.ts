@@ -28,9 +28,9 @@ export async function runAgent(
   const startTime = Date.now()
 
   try {
-    // Call Glean Agent API
+    // Call Glean Agent API (REST API endpoint)
     const response = await fetch(
-      `${config.gleanBackend}/api/v1/agents/${agentId}/run`,
+      `${config.gleanBackend}/rest/api/v1/agents/${agentId}/run`,
       {
         method: 'POST',
         headers: {

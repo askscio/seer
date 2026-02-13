@@ -6,15 +6,10 @@
  * - Metrics (direct measurement)
  */
 
-import Anthropic from '@anthropic-ai/sdk'
-import OpenAI from 'openai'
 import { config } from './config'
 import type { CriterionDefinition } from '../criteria/defaults'
 import type { JudgeScore, AgentResult } from '../types'
 import { extractMetric } from './metrics'
-
-const anthropic = new Anthropic({ apiKey: config.anthropicApiKey })
-const openai = new OpenAI({ apiKey: config.openaiApiKey })
 
 /**
  * Judge a response against a criterion
@@ -36,13 +31,11 @@ export async function judgeResponse(
   // Build appropriate prompt for score type
   const prompt = buildJudgePrompt(criterion, query, response, expectedAnswer)
 
-  // Call appropriate model
-  const text = model.startsWith('gpt')
-    ? await callOpenAI(model, prompt)
-    : await callAnthropic(model, prompt)
+  // Call Glean chat API for judging
+  const text = await callGleanChat(prompt)
 
   // Parse based on score type
-  return parseJudgeResponse(text, criterion, model)
+  return parseJudgeResponse(text, criterion, 'glean-chat')
 }
 
 /**
@@ -164,42 +157,42 @@ function parseJudgeResponse(
 }
 
 /**
- * Call Anthropic API for judging
+ * Call Glean Chat API for judging
  */
-async function callAnthropic(model: string, prompt: string): Promise<string> {
-  if (!config.anthropicApiKey) {
-    throw new Error('ANTHROPIC_API_KEY not configured')
+async function callGleanChat(prompt: string): Promise<string> {
+  const response = await fetch(
+    `${config.gleanBackend}/rest/api/v1/chat`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.gleanApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      })
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Glean Chat API error: ${response.status} ${response.statusText}`)
   }
 
-  const message = await anthropic.messages.create({
-    model: model === 'claude-sonnet-4' ? 'claude-sonnet-4-20250514' : model,
-    max_tokens: 2048,
-    temperature: 0,
-    messages: [{ role: 'user', content: prompt }]
-  })
+  const data = await response.json() as any
 
-  const content = message.content[0]
-  if (content.type !== 'text') {
-    throw new Error('Unexpected response type from Anthropic')
+  // Extract text from Glean chat response
+  // Format: { messages: [{ content: "response text" }] } or similar
+  const content = data.message?.content || data.messages?.[0]?.content || data.content
+
+  if (!content) {
+    console.error('Unexpected Glean chat response:', JSON.stringify(data, null, 2))
+    throw new Error('No content found in Glean chat response')
   }
 
-  return content.text
-}
-
-/**
- * Call OpenAI API for judging
- */
-async function callOpenAI(model: string, prompt: string): Promise<string> {
-  if (!config.openaiApiKey) {
-    throw new Error('OPENAI_API_KEY not configured')
-  }
-
-  const completion = await openai.chat.completions.create({
-    model,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0,
-    max_tokens: 2048
-  })
-
-  return completion.choices[0].message.content || ''
+  return content
 }

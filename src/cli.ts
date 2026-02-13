@@ -130,7 +130,7 @@ program
   .command('run <set-id>')
   .description('Run evaluation on an eval set')
   .option('--criteria <list>', 'Comma-separated criteria IDs', 'task_success,factuality')
-  .option('--judge-model <model>', 'Primary judge model', 'claude-sonnet-4')
+  .option('--judge-model <model>', 'Judge model (uses Glean chat)', 'glean-chat')
   .action(async (setId, opts) => {
     try {
       // Get eval set
