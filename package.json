@@ -1,0 +1,28 @@
+{
+  "name": "seer",
+  "version": "0.1.0",
+  "description": "Agent evaluation framework with LLM-as-judge methodology",
+  "type": "module",
+  "bin": {
+    "seer": "./src/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "db:generate": "drizzle-kit generate:sqlite",
+    "db:push": "drizzle-kit push:sqlite",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "@anthropic-ai/sdk": "^0.30.0",
+    "openai": "^4.0.0",
+    "zod": "^3.23.0",
+    "drizzle-orm": "^0.30.0",
+    "nanoid": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "drizzle-kit": "^0.20.0",
+    "typescript": "^5.0.0"
+  }
+}
