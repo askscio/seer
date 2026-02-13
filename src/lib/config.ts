@@ -7,6 +7,7 @@ interface Config {
   gleanChatApiKey: string   // For chat/judge calls
   gleanBackend: string
   gleanInstance: string
+  gleanSessionCookie?: string  // Optional: For internal API trace access (internal employees only)
 }
 
 function loadConfig(): Config {
@@ -15,6 +16,7 @@ function loadConfig(): Config {
   const gleanChatApiKey = process.env.GLEAN_CHAT_API_KEY
   const gleanBackend = process.env.GLEAN_BACKEND
   const gleanInstance = process.env.GLEAN_INSTANCE
+  const gleanSessionCookie = process.env.GLEAN_SESSION_COOKIE
 
   if (!gleanAgentApiKey) {
     throw new Error('GLEAN_AGENT_API_KEY not found in environment. Copy .env.example to .env and add your keys.')
@@ -36,7 +38,8 @@ function loadConfig(): Config {
     gleanAgentApiKey: gleanAgentApiKey!,
     gleanChatApiKey: gleanChatApiKey!,
     gleanBackend: gleanBackend!,
-    gleanInstance: gleanInstance!
+    gleanInstance: gleanInstance!,
+    gleanSessionCookie
   }
 }
 

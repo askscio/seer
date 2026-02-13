@@ -12,8 +12,12 @@ import { evalSets, evalCases, evalRuns, evalResults, evalScores, evalCriteria } 
 import { runAgent } from './data/glean'
 import { judgeResponse } from './lib/judge'
 import { DEFAULT_CRITERIA, getCriterion } from './criteria/defaults'
+import { generateEvalSet } from './lib/generate'
+import { fetchAgentInfo } from './lib/fetch-agent'
+import { config } from './lib/config'
 import type { JudgeScore } from './types'
 import type { CriterionDefinition } from './criteria/defaults'
+import * as readline from 'readline'
 
 // Initialize database before running commands
 await initializeDB()
@@ -200,17 +204,24 @@ program
             scores.push(score)
           }
 
-          // 3. Calculate overall score (weighted average of continuous/binary scores)
-          const weightedScores = scores
-            .filter(s => s.scoreValue !== undefined)
-            .map(s => {
-              const criterion = getCriterion(s.criterionId)!
-              return s.scoreValue! * criterion.weight
-            })
-          const totalWeight = scores
-            .filter(s => s.scoreValue !== undefined)
-            .reduce((sum, s) => sum + getCriterion(s.criterionId)!.weight, 0)
-          const overallScore = weightedScores.reduce((sum, s) => sum + s, 0) / totalWeight
+          // 3. Calculate overall score (weighted average of continuous/binary scores only, exclude metrics)
+          const qualityScores = scores.filter(s => {
+            const criterion = getCriterion(s.criterionId)!
+            return s.scoreValue !== undefined && criterion.scoreType !== 'metric'
+          })
+
+          const weightedScores = qualityScores.map(s => {
+            const criterion = getCriterion(s.criterionId)!
+            return s.scoreValue! * criterion.weight
+          })
+
+          const totalWeight = qualityScores.reduce((sum, s) => {
+            return sum + getCriterion(s.criterionId)!.weight
+          }, 0)
+
+          const overallScore = totalWeight > 0
+            ? weightedScores.reduce((sum, s) => sum + s, 0) / totalWeight
+            : 0
 
           // 4. Save result
           const resultId = generateId()
@@ -413,6 +424,135 @@ program
       }
     } catch (error) {
       console.error('Error listing:', error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+  })
+
+// ===== Generate Command =====
+
+program
+  .command('generate <agent-id>')
+  .description('Generate eval set using AI (Glean chat)')
+  .option('--count <n>', 'Number of test cases to generate', '10')
+  .option('--name <name>', 'Override generated name')
+  .option('--description <desc>', 'Override generated description')
+  .action(async (agentId, opts) => {
+    try {
+      console.log(`Generating eval set for agent ${agentId}...`)
+
+      // Fetch agent schema
+      console.log('Fetching agent schema...')
+      const schemaResp = await fetch(
+        `${config.gleanBackend}/rest/api/v1/agents/${agentId}/schemas`,
+        {
+          headers: {
+            'Authorization': `Bearer ${config.gleanAgentApiKey}`
+          }
+        }
+      )
+
+      if (!schemaResp.ok) {
+        throw new Error(`Failed to fetch agent schema: ${schemaResp.status} ${schemaResp.statusText}`)
+      }
+
+      const schema = await schemaResp.json()
+
+      // Fetch agent name
+      console.log('Fetching agent details...')
+      const agentInfo = await fetchAgentInfo(agentId)
+      const agentName = agentInfo?.name
+
+      if (agentName) {
+        console.log(`Agent: ${agentName}`)
+      }
+
+      // Show schema info
+      const inputFields = Object.keys(schema.input_schema || {})
+      const hasFormInputs = inputFields.length > 0
+
+      console.log(`Type: ${hasFormInputs ? 'Form-based' : 'Chat-style'}`)
+      if (hasFormInputs) {
+        console.log(`Fields: ${inputFields.join(', ')}`)
+        console.log('\nField Details:')
+        for (const [field, config] of Object.entries(schema.input_schema)) {
+          const fieldConfig = config as any
+          console.log(`  • ${field}: ${fieldConfig.type || 'unknown'}`)
+          if (fieldConfig.description) {
+            console.log(`    ${fieldConfig.description}`)
+          }
+        }
+      }
+
+      // Generate eval set using AI
+      console.log('\nGenerating test cases with AI (grounded in company knowledge)...\n')
+      const generated = await generateEvalSet({
+        agentId,
+        count: parseInt(opts.count),
+        schema,
+        agentName
+      })
+
+      // Show preview
+      console.log(`\n✨ Generated Eval Set:\n`)
+      console.log(`Name: ${opts.name || generated.name}`)
+      console.log(`Description: ${opts.description || generated.description}`)
+      console.log(`\nTest Cases (${generated.cases.length}):\n`)
+
+      generated.cases.forEach((c, i) => {
+        console.log(`${i + 1}. ${c.query}`)
+        if (c.expectedAnswer) {
+          console.log(`   Expected: ${c.expectedAnswer}`)
+        }
+        console.log()
+      })
+
+      // Ask for approval
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      })
+
+      rl.question('Save this eval set? (y/n): ', async (answer: string) => {
+        if (answer.toLowerCase() === 'y') {
+          try {
+            // Save to database
+            const setId = generateId()
+            await db.insert(evalSets).values({
+              id: setId,
+              name: opts.name || generated.name,
+              description: opts.description || generated.description,
+              agentId,
+              createdAt: new Date()
+            })
+
+            // Save cases
+            for (const testCase of generated.cases) {
+              const caseId = generateId()
+              await db.insert(evalCases).values({
+                id: caseId,
+                evalSetId: setId,
+                query: testCase.query,
+                expectedAnswer: testCase.expectedAnswer || null,
+                context: testCase.context || null,
+                createdAt: new Date()
+              })
+            }
+
+            console.log(`\n✓ Saved eval set: ${setId}`)
+            console.log(`\nRun evaluation with:`)
+            console.log(`  seer run ${setId} --criteria task_success,factuality,relevance`)
+          } catch (error) {
+            console.error('Error saving eval set:', error)
+          }
+        } else {
+          console.log('Cancelled')
+        }
+        rl.close()
+        process.exit(0)
+      })
+
+    } catch (error) {
+      console.error('Error generating eval set:', error instanceof Error ? error.message : String(error))
       process.exit(1)
     }
   })

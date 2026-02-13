@@ -15,6 +15,8 @@ Seer systematically evaluates AI agents using research-backed scoring across mul
 
 ## Installation
 
+### CLI Setup
+
 ```bash
 cd lab/projects/seer
 bun install
@@ -28,9 +30,53 @@ bun run db:generate
 bun run db:push
 ```
 
+### Web UI Setup (Optional)
+
+```bash
+cd web
+bun install
+
+# Copy environment variables
+cp .env.local.example .env.local
+# Edit .env.local with your API keys
+
+# Start development server
+bun run dev
+# Open http://localhost:3000
+```
+
+## Metrics & Known Limitations
+
+### What Seer Measures
+- ✅ **Response quality** — LLM-as-judge scoring across multiple criteria
+- ✅ **Client-measured latency** — End-to-end response time
+- ✅ **Judge reasoning** — Detailed explanations for each score
+- ✅ **Historical tracking** — All runs and results persisted in SQLite
+
+### Trace Metadata (Not Yet Available)
+
+Token counts, tool call details, and execution traces are **not available** from the public Glean Agent API. The internal API that provides this data requires browser session cookies bound to Cloudflare TLS fingerprints, which can't be replayed from CLI tools.
+
+**Future options being explored:**
+- Playwright-based browser automation
+- Internal API service account
+- Feature request for trace data in public API
+
+See `docs/TRACE_API_LIMITATIONS.md` for the full investigation.
+
 ## Quick Start
 
-### 1. Create an eval set
+### Option 1: AI-Powered Generation (Recommended)
+
+```bash
+# Generate eval set automatically using Glean chat
+seer generate <agent-id> --count 10
+
+# Review generated cases and approve
+# Cases are grounded in your company's knowledge base
+```
+
+### Option 2: Manual Creation
 
 ```bash
 seer set create \
@@ -38,8 +84,6 @@ seer set create \
   --agent-id "abc123" \
   --description "Evaluating support agent quality"
 ```
-
-This will prompt you to add test cases interactively.
 
 ### 2. Add more cases (optional)
 
@@ -167,15 +211,26 @@ seer results <run-id>
 ## Architecture
 
 ```
-CLI (Commander.js)
+User Interface
+├── CLI (Commander.js)
+└── Web UI (Next.js) [v0.2.0]
     ↓
-DB Layer (Drizzle + SQLite)
+DB Layer (Shared SQLite + Drizzle ORM)
     ↓
 Eval Engine
-    ├── Agent Runner (Glean API)
-    ├── Judge (Anthropic/OpenAI)
-    └── Metrics (latency, tokens, tool calls)
+├── Agent Runner (Glean API)
+├── AI Generator (Glean Chat) [v0.2.0]
+├── Judge (LLM-as-judge)
+└── Metrics (latency, tokens, tool calls)
 ```
+
+### New in v0.2.0
+
+- **Web UI** - Browser-based interface for managing eval sets
+- **AI Generation** - Automatically generate test cases using Glean chat
+- **Documentation** - Complete architecture, features, and issue tracking
+
+See `docs/architecture.md` for detailed system design.
 
 ## Research Foundation
 
