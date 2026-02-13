@@ -6,10 +6,17 @@
  * - Metrics (direct measurement)
  */
 
+import { Glean } from '@gleanwork/api-client'
 import { config } from './config'
 import type { CriterionDefinition } from '../criteria/defaults'
 import type { JudgeScore, AgentResult } from '../types'
 import { extractMetric } from './metrics'
+
+// Initialize Glean SDK client for chat/judge calls
+const glean = new Glean({
+  apiToken: config.gleanChatApiKey,
+  instance: config.gleanInstance
+})
 
 /**
  * Judge a response against a criterion
@@ -157,42 +164,48 @@ function parseJudgeResponse(
 }
 
 /**
- * Call Glean Chat API for judging
+ * Call Glean Chat API for judging using TypeScript SDK
  */
 async function callGleanChat(prompt: string): Promise<string> {
-  const response = await fetch(
-    `${config.gleanBackend}/rest/api/v1/chat`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.gleanApiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ]
-      })
+  try {
+    const response = await glean.client.chat.create({
+      messages: [
+        {
+          author: 'USER',
+          fragments: [
+            {
+              text: prompt
+            }
+          ]
+        }
+      ],
+      saveChat: false,
+      stream: false
+    })
+
+    // Extract text from response messages (look for GLEAN_AI messages)
+    const assistantMessages = response.messages?.filter(m =>
+      m.author === 'GLEAN_AI'
+    ) || []
+
+    if (assistantMessages.length === 0) {
+      console.error('Unexpected Glean chat response:', JSON.stringify(response, null, 2))
+      throw new Error('No GLEAN_AI messages found in chat response')
     }
-  )
 
-  if (!response.ok) {
-    throw new Error(`Glean Chat API error: ${response.status} ${response.statusText}`)
+    // Concatenate all text fragments from all GLEAN_AI messages
+    const text = assistantMessages
+      .flatMap(msg => msg.fragments || [])
+      .map(f => f.text)
+      .filter((t): t is string => typeof t === 'string')
+      .join('')
+
+    if (!text) {
+      throw new Error('No text content found in Glean chat response')
+    }
+
+    return text
+  } catch (error) {
+    throw new Error(`Glean Chat SDK error: ${error instanceof Error ? error.message : String(error)}`)
   }
-
-  const data = await response.json() as any
-
-  // Extract text from Glean chat response
-  // Format: { messages: [{ content: "response text" }] } or similar
-  const content = data.message?.content || data.messages?.[0]?.content || data.content
-
-  if (!content) {
-    console.error('Unexpected Glean chat response:', JSON.stringify(data, null, 2))
-    throw new Error('No content found in Glean chat response')
-  }
-
-  return content
 }
