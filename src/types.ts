@@ -30,6 +30,7 @@ export interface AgentResult {
   latencyMs: number
   totalTokens?: number
   toolCalls?: any[]
+  traceId?: string  // workflowTraceId from /rest/api/v1/runworkflow
   timestamp: Date
 }
 

@@ -1,37 +1,43 @@
 /**
  * Glean Agent API client for running agents and collecting responses
  *
- * Uses the public REST API: POST /rest/api/v1/agents/runs/wait
+ * Uses the internal runworkflow endpoint: POST /rest/api/v1/runworkflow
+ * with CHAT-scoped API key for trace metadata access.
  *
- * Note on trace metadata:
- * - Public API does NOT include token counts or tool call details
- * - Internal API (/api/v1/runworkflow) has trace data but requires browser session cookies
- * - Session cookies can't be replayed from CLI due to Cloudflare TLS fingerprinting
- * - We keep internal API code for future use (e.g., Playwright-based approach, service account)
+ * Discovery path:
+ * - Public API (/rest/api/v1/agents/runs/wait) → no trace metadata
+ * - Internal API (/api/v1/runworkflow) → requires browser session cookies
+ * - REST-fronted internal (/rest/api/v1/runworkflow) → WORKS with CHAT-scoped key!
+ *   Returns workflowTraceId, agentTraceInfo, and tool call details.
  */
 
 import { config } from '../lib/config'
 import type { AgentResult } from '../types'
-import {
-  runAgentInternal,
-  getWorkflowTrace,
-  extractMetricsFromTrace,
-  SessionExpiredError
-} from '../lib/internal-agent'
 
-interface GleanAgentResponse {
-  run?: {
-    agent_id?: string
-    status?: string
-  }
-  messages?: Array<{
-    role?: string
-    content?: Array<{
-      text?: string
-      type?: string
-    }>
-    workflowTraceId?: string
+interface RunWorkflowMessage {
+  author: string
+  fragments: Array<{
+    text?: string
+    action?: {
+      metadata?: {
+        type?: string
+        name?: string
+        displayName?: string
+      }
+    }
   }>
+  workflowTraceId?: string
+  agentTraceInfo?: {
+    traceId: string
+    startTimeMillis: number
+  }
+  stepId?: string
+  messageType?: string
+}
+
+interface RunWorkflowResponse {
+  messages: RunWorkflowMessage[]
+  chatId?: string
 }
 
 interface AgentSchema {
@@ -65,9 +71,7 @@ async function getAgentSchema(agentId: string): Promise<AgentSchema> {
 
 /**
  * Run a Glean agent with a query and collect the response
- *
- * Tries internal API first (if session cookie available) for trace metadata,
- * otherwise uses public REST API (response quality + latency only).
+ * Uses /rest/api/v1/runworkflow with CHAT-scoped key for trace access
  */
 export async function runAgent(
   agentId: string,
@@ -76,179 +80,108 @@ export async function runAgent(
 ): Promise<AgentResult> {
   const startTime = Date.now()
 
-  // Try internal API first if session cookie is available
-  if (config.gleanSessionCookie) {
-    try {
-      return await runAgentWithTrace(agentId, query, caseId, startTime)
-    } catch (error) {
-      if (error instanceof SessionExpiredError) {
-        console.warn('  ⚠ Session cookie expired, falling back to public API')
-      } else {
-        console.warn('  ⚠ Internal API failed, falling back to public API:', error instanceof Error ? error.message : String(error))
-      }
-    }
-  }
-
-  // Public REST API (primary path)
-  return await runAgentPublic(agentId, query, caseId, startTime)
-}
-
-/**
- * Run agent via public REST API
- * Endpoint: POST /rest/api/v1/agents/runs/wait
- *
- * For form-based agents: { agent_id, input: { fieldName: query } }
- * For chat-style agents: { agent_id, messages: [...] }
- */
-async function runAgentPublic(
-  agentId: string,
-  query: string,
-  caseId: string,
-  startTime: number
-): Promise<AgentResult> {
   const schema = await getAgentSchema(agentId)
   const inputSchema = schema.input_schema || {}
   const inputFields = Object.keys(inputSchema)
   const hasFormInputs = inputFields.length > 0
 
-  // Build request body based on agent type
-  const requestBody = hasFormInputs
-    ? {
-        agent_id: agentId,
-        input: { [inputFields[0]]: query },
-      }
-    : {
-        agent_id: agentId,
-        messages: [{ role: 'USER', content: [{ text: query, type: 'text' }] }],
-      }
+  // Build payload in internal API format (discovered from Glean source)
+  const payload: any = {
+    workflowId: agentId,   // Internal API uses workflowId, not agent_id
+    stream: false,
+    enableTrace: true,      // Request trace metadata
+  }
 
-  // POST to the correct endpoint (agent_id goes in body, NOT in URL path)
+  if (hasFormInputs) {
+    payload.fields = { [inputFields[0]]: query }  // Internal API uses "fields"
+  } else {
+    payload.messages = [{
+      author: 'USER',                      // Internal API uses "author", not "role"
+      fragments: [{ text: query }],        // Internal API uses "fragments", not "content"
+    }]
+  }
+
+  // Use CHAT-scoped key on /rest/api/v1/runworkflow
   const response = await fetch(
-    `${config.gleanBackend}/rest/api/v1/agents/runs/wait`,
+    `${config.gleanBackend}/rest/api/v1/runworkflow`,
     {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${config.gleanAgentApiKey}`,
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.gleanChatApiKey}`,  // CHAT scope required!
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(payload),
     }
   )
 
   if (!response.ok) {
     const error = await response.text()
-    throw new Error(`Agent API error: ${response.status} - ${error}`)
+    throw new Error(`runworkflow error: ${response.status} - ${error}`)
   }
 
-  const data = await response.json() as GleanAgentResponse
+  const data = await response.json() as RunWorkflowResponse
+  const latencyMs = Date.now() - startTime
 
-  return {
-    caseId,
-    query,
-    response: extractResponse(data),
-    latencyMs: Date.now() - startTime,
-    totalTokens: undefined,  // Not available in public API
-    toolCalls: undefined,     // Not available in public API
-    timestamp: new Date(),
-  }
-}
+  // Extract trace metadata from response messages
+  const firstMsg = data.messages?.[0]
+  const traceId = firstMsg?.workflowTraceId
+  const traceInfo = firstMsg?.agentTraceInfo
 
-/**
- * Run agent via internal API with full trace metadata
- * Requires GLEAN_SESSION_COOKIE from browser SSO
- */
-async function runAgentWithTrace(
-  agentId: string,
-  query: string,
-  caseId: string,
-  startTime: number
-): Promise<AgentResult> {
-  const schema = await getAgentSchema(agentId)
-  const inputSchema = schema.input_schema || {}
-  const inputFields = Object.keys(inputSchema)
-  const hasFormInputs = inputFields.length > 0
-
-  const request = hasFormInputs
-    ? {
-        agent_id: agentId,
-        input: { [inputFields[0]]: query },
-      }
-    : {
-        agent_id: agentId,
-        messages: [{ role: 'USER', content: [{ text: query, type: 'text' }] }],
-      }
-
-  const agentResponse = await runAgentInternal(request)
-
-  // Extract workflow trace ID
-  const workflowTraceId = agentResponse.messages
-    .find(m => m.workflowTraceId)
-    ?.workflowTraceId
-
-  let totalTokens: number | undefined
-  let toolCalls: any[] | undefined
-
-  if (workflowTraceId) {
-    try {
-      const trace = await getWorkflowTrace(
-        workflowTraceId,
-        new Date(startTime),
-        new Date()
-      )
-      const metrics = extractMetricsFromTrace(trace)
-      totalTokens = metrics.totalTokens
-      toolCalls = metrics.llmCalls.map((call, i) => ({
-        name: `llm_call_${i}`,
-        inputTokens: call.inputTokens,
-        outputTokens: call.outputTokens,
-      }))
-
-      console.log(`  → Tokens: ${totalTokens} (${metrics.inputTokens} in, ${metrics.outputTokens} out)`)
-      console.log(`  → Tool calls: ${metrics.toolCallCount}`)
-    } catch (error) {
-      console.warn('  ⚠ Failed to fetch trace:', error instanceof Error ? error.message : String(error))
-    }
+  if (traceId) {
+    console.log(`  → Trace ID: ${traceId.slice(0, 16)}...`)
   }
 
-  return {
-    caseId,
-    query,
-    response: agentResponse.messages
-      .filter(m => m.role === 'GLEAN_AI')
-      .flatMap(m => m.fragments || [])
-      .map(f => f.text)
-      .join(''),
-    latencyMs: Date.now() - startTime,
-    totalTokens,
-    toolCalls,
-    timestamp: new Date(),
-  }
-}
-
-/**
- * Extract text response from Glean API response
- */
-function extractResponse(data: GleanAgentResponse): string {
-  const aiMessages = data.messages?.filter(m => m.role === 'GLEAN_AI' || m.role === 'assistant')
-
-  if (!aiMessages || aiMessages.length === 0) {
-    const anyMessage = data.messages?.[0]
-    if (anyMessage?.content?.[0]?.text) {
-      return anyMessage.content[0].text
-    }
-    throw new Error('No response text found in agent output')
+  // Extract tool calls from message fragments
+  const toolCalls = extractToolCalls(data.messages)
+  if (toolCalls.length > 0) {
+    console.log(`  → Tool calls: ${toolCalls.length}`)
   }
 
-  const texts = aiMessages
-    .flatMap(msg => msg.content || [])
-    .filter(c => c.type === 'text')
-    .map(c => c.text)
+  // Extract response text from GLEAN_AI messages
+  const responseText = data.messages
+    .filter(m => m.author === 'GLEAN_AI')
+    .flatMap(m => m.fragments || [])
+    .map(f => f.text)
     .filter(t => t)
     .join('')
 
-  if (!texts) {
+  if (!responseText) {
     throw new Error('No response text found in agent output')
   }
 
-  return texts
+  return {
+    caseId,
+    query,
+    response: responseText,
+    latencyMs,
+    totalTokens: undefined,  // Token counts require getworkflowtrace (not yet accessible)
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    traceId,
+    timestamp: new Date(),
+  }
+}
+
+/**
+ * Extract tool call information from message fragments
+ * The runworkflow response embeds action metadata in fragments
+ */
+function extractToolCalls(messages: RunWorkflowMessage[]): any[] {
+  const toolCalls: any[] = []
+
+  for (const msg of messages) {
+    if (msg.author !== 'GLEAN_AI') continue
+
+    for (const fragment of msg.fragments || []) {
+      if (fragment.action?.metadata) {
+        const meta = fragment.action.metadata
+        toolCalls.push({
+          name: meta.displayName || meta.name || 'unknown',
+          type: meta.type,
+          stepId: msg.stepId,
+        })
+      }
+    }
+  }
+
+  return toolCalls
 }
