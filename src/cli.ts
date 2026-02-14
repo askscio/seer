@@ -10,7 +10,7 @@ import { generateId } from './lib/id'
 import { db, initializeDB } from './db/index'
 import { evalSets, evalCases, evalRuns, evalResults, evalScores, evalCriteria } from './db/schema'
 import { runAgent } from './data/glean'
-import { judgeResponse } from './lib/judge'
+import { judgeResponse, judgeResponseBatch } from './lib/judge'
 import { DEFAULT_CRITERIA, getCriterion } from './criteria/defaults'
 import { generateEvalSet } from './lib/generate'
 import { smartGenerate } from './lib/generate-agent'
@@ -134,8 +134,8 @@ setCmd
 program
   .command('run <set-id>')
   .description('Run evaluation on an eval set')
-  .option('--criteria <list>', 'Comma-separated criteria IDs', 'task_success,factuality')
-  .option('--judge-model <model>', 'Judge model (uses Glean chat)', 'glean-chat')
+  .option('--criteria <list>', 'Comma-separated criteria IDs', 'topical_coverage,response_quality,groundedness,hallucination_risk')
+  .option('--deep', 'Include factual accuracy verification (uses company search)', false)
   .action(async (setId, opts) => {
     try {
       // Get eval set
@@ -153,17 +153,21 @@ program
 
       // Parse criteria
       const criteriaIds = opts.criteria.split(',').map((s: string) => s.trim())
+      if (opts.deep) criteriaIds.push('factual_accuracy')
       const criteria = criteriaIds.map((id: string) => {
         const c = getCriterion(id)
-        if (!c) throw new Error(`Unknown criterion: ${id}`)
+        if (!c) throw new Error(`Unknown criterion: ${id}. Available: topical_coverage, response_quality, groundedness, hallucination_risk, factual_accuracy, latency, tool_call_count`)
         return c
       })
+
+      const mode = opts.deep ? 'Deep (with factuality verification)' : 'Quick'
 
       console.log(`\n🔍 Running evaluation: ${set.name}`)
       console.log(`   Agent: ${set.agentId}`)
       console.log(`   Cases: ${cases.length}`)
       console.log(`   Criteria: ${criteriaIds.join(', ')}`)
-      console.log(`   Judge: ${opts.judgeModel}\n`)
+      console.log(`   Mode: ${mode}`)
+      console.log(`   Judge: Opus 4.6\n`)
 
       // Create run
       const runId = generateId()
@@ -191,19 +195,14 @@ program
           // 1. Run agent
           const agentResult = await runAgent(set.agentId, testCase.query, testCase.id)
 
-          // 2. Judge each criterion
-          const scores: JudgeScore[] = []
-          for (const criterion of criteria) {
-            const score = await judgeResponse(
-              criterion,
-              testCase.query,
-              agentResult.response,
-              agentResult,
-              testCase.expectedAnswer || undefined,
-              opts.judgeModel
-            )
-            scores.push(score)
-          }
+          // 2. Judge (batch by call type — coverage, faithfulness, factuality)
+          const scores = await judgeResponseBatch(
+            criteria,
+            testCase.query,
+            agentResult.response,
+            agentResult,
+            testCase.expectedAnswer || undefined,
+          )
 
           // 3. Calculate overall score (weighted average of continuous/binary scores only, exclude metrics)
           const qualityScores = scores.filter(s => {
