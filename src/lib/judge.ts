@@ -110,7 +110,7 @@ function parseJudgeResponse(
   criterion: CriterionDefinition,
   model: string
 ): JudgeScore {
-  const reasoningMatch = text.match(/REASONING:\s*(.+?)(?=SCORE:|CATEGORY:|ANSWER:|$)/s)
+  const reasoningMatch = text.match(/REASONING:\s*([\s\S]+?)(?=SCORE:|CATEGORY:|ANSWER:|$)/)
 
   if (!reasoningMatch) {
     throw new Error('Failed to parse judge reasoning')

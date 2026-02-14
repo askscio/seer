@@ -24,7 +24,7 @@ export function extractMetric(
       break
 
     case 'totalTokens':
-      value = agentResult.totalTokens || 0
+      value = 0  // Token counts not available via REST API (see TRACE_API_LIMITATIONS.md)
       break
 
     case 'toolCallCount':

@@ -13,6 +13,7 @@ import { runAgent } from './data/glean'
 import { judgeResponse } from './lib/judge'
 import { DEFAULT_CRITERIA, getCriterion } from './criteria/defaults'
 import { generateEvalSet } from './lib/generate'
+import { smartGenerate } from './lib/generate-agent'
 import { fetchAgentInfo } from './lib/fetch-agent'
 import { config } from './lib/config'
 import type { JudgeScore } from './types'
@@ -483,13 +484,13 @@ program
         }
       }
 
-      // Generate eval set using AI
-      console.log('\nGenerating test cases with AI (grounded in company knowledge)...\n')
-      const generated = await generateEvalSet({
+      // Generate eval set using smart agent (search + chat grounding)
+      const generated = await smartGenerate({
         agentId,
-        count: parseInt(opts.count),
+        agentName: agentName || `Agent ${agentId.slice(0, 8)}`,
+        agentDescription: agentInfo?.description || '',
         schema,
-        agentName
+        count: parseInt(opts.count),
       })
 
       // Show preview
