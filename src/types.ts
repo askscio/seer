@@ -28,10 +28,11 @@ export interface AgentResult {
   query: string
   response: string
   latencyMs: number
-  totalTokens?: number
-  toolCalls?: any[]
-  traceId?: string  // workflowTraceId from /rest/api/v1/runworkflow
+  toolCalls?: any[]          // Tools used: Glean Search, Think, Generate, etc.
+  traceId?: string           // workflowTraceId for linking to debug UI
+  reasoningChain?: any[]     // Search queries, docs read, steps taken
   timestamp: Date
+  // Note: token counts not available via REST API (see docs/TRACE_API_LIMITATIONS.md)
 }
 
 // Judge score for single criterion

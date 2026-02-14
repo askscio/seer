@@ -231,7 +231,7 @@ program
             caseId: testCase.id,
             agentResponse: agentResult.response,
             latencyMs: agentResult.latencyMs,
-            totalTokens: agentResult.totalTokens || null,
+            totalTokens: null,  // Not available via REST API (see TRACE_API_LIMITATIONS.md)
             toolCalls: JSON.stringify(agentResult.toolCalls || []),
             overallScore,
             timestamp: new Date()

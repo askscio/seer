@@ -1,38 +1,38 @@
 /**
  * Glean Agent API client for running agents and collecting responses
  *
- * Uses the internal runworkflow endpoint: POST /rest/api/v1/runworkflow
- * with CHAT-scoped API key for trace metadata access.
+ * Auth: CHAT-scoped API key (Bearer token) — no cookies needed
+ * Endpoint: POST /rest/api/v1/runworkflow
+ * Payload format: { workflowId, fields/messages, stream: false, enableTrace: true }
  *
- * Discovery path:
- * - Public API (/rest/api/v1/agents/runs/wait) → no trace metadata
- * - Internal API (/api/v1/runworkflow) → requires browser session cookies
- * - REST-fronted internal (/rest/api/v1/runworkflow) → WORKS with CHAT-scoped key!
- *   Returns workflowTraceId, agentTraceInfo, and tool call details.
+ * Returns: response text, trace ID, tool calls, reasoning chain (search queries, docs read)
+ * Known limitation: token counts require /api/v1/getworkflowtrace (session-auth only, not exposed to API keys)
  */
 
 import { config } from '../lib/config'
 import type { AgentResult } from '../types'
 
+interface RunWorkflowFragment {
+  text?: string
+  action?: {
+    metadata?: {
+      type?: string
+      name?: string
+      displayName?: string
+    }
+  }
+  structuredResults?: Array<{ document?: { title?: string; url?: string } }>
+  querySuggestion?: { query?: string; datasource?: string }
+  citation?: { sourceDocument?: { id?: string; title?: string; url?: string } }
+}
+
 interface RunWorkflowMessage {
   author: string
-  fragments: Array<{
-    text?: string
-    action?: {
-      metadata?: {
-        type?: string
-        name?: string
-        displayName?: string
-      }
-    }
-  }>
+  fragments: RunWorkflowFragment[]
   workflowTraceId?: string
-  agentTraceInfo?: {
-    traceId: string
-    startTimeMillis: number
-  }
+  agentTraceInfo?: { traceId: string; startTimeMillis: number }
   stepId?: string
-  messageType?: string
+  messageType?: string  // CONTENT = final output, UPDATE = intermediate steps
 }
 
 interface RunWorkflowResponse {
@@ -46,12 +46,9 @@ interface AgentSchema {
   output_schema?: any
 }
 
-// Cache agent schemas to avoid repeated fetches within a run
+// Cache schemas within a run to avoid repeated fetches
 const schemaCache = new Map<string, AgentSchema>()
 
-/**
- * Fetch and cache agent schema
- */
 async function getAgentSchema(agentId: string): Promise<AgentSchema> {
   if (schemaCache.has(agentId)) return schemaCache.get(agentId)!
 
@@ -70,8 +67,7 @@ async function getAgentSchema(agentId: string): Promise<AgentSchema> {
 }
 
 /**
- * Run a Glean agent with a query and collect the response
- * Uses /rest/api/v1/runworkflow with CHAT-scoped key for trace access
+ * Run a Glean agent and collect the full response with trace metadata
  */
 export async function runAgent(
   agentId: string,
@@ -85,30 +81,28 @@ export async function runAgent(
   const inputFields = Object.keys(inputSchema)
   const hasFormInputs = inputFields.length > 0
 
-  // Build payload in internal API format (discovered from Glean source)
   const payload: any = {
-    workflowId: agentId,   // Internal API uses workflowId, not agent_id
+    workflowId: agentId,
     stream: false,
-    enableTrace: true,      // Request trace metadata
+    enableTrace: true,
   }
 
   if (hasFormInputs) {
-    payload.fields = { [inputFields[0]]: query }  // Internal API uses "fields"
+    payload.fields = { [inputFields[0]]: query }
   } else {
     payload.messages = [{
-      author: 'USER',                      // Internal API uses "author", not "role"
-      fragments: [{ text: query }],        // Internal API uses "fragments", not "content"
+      author: 'USER',
+      fragments: [{ text: query }],
     }]
   }
 
-  // Use CHAT-scoped key on /rest/api/v1/runworkflow
   const response = await fetch(
     `${config.gleanBackend}/rest/api/v1/runworkflow`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.gleanChatApiKey}`,  // CHAT scope required!
+        'Authorization': `Bearer ${config.gleanChatApiKey}`,
       },
       body: JSON.stringify(payload),
     }
@@ -122,58 +116,80 @@ export async function runAgent(
   const data = await response.json() as RunWorkflowResponse
   const latencyMs = Date.now() - startTime
 
-  // Extract trace metadata from response messages
+  // Trace metadata
   const firstMsg = data.messages?.[0]
   const traceId = firstMsg?.workflowTraceId
-  const traceInfo = firstMsg?.agentTraceInfo
 
   if (traceId) {
-    console.log(`  → Trace ID: ${traceId.slice(0, 16)}...`)
+    console.log(`  → Trace: ${traceId.slice(0, 16)}...`)
   }
 
-  // Extract tool calls from message fragments
+  // Tool calls from action fragments
   const toolCalls = extractToolCalls(data.messages)
   if (toolCalls.length > 0) {
-    console.log(`  → Tool calls: ${toolCalls.length}`)
+    console.log(`  → Tools: ${toolCalls.map(t => t.name).join(', ')}`)
   }
 
-  // Extract response text from GLEAN_AI messages
-  const responseText = data.messages
-    .filter(m => m.author === 'GLEAN_AI')
-    .flatMap(m => m.fragments || [])
-    .map(f => f.text)
-    .filter(t => t)
-    .join('')
+  // Final response text — CONTENT messages only (not intermediate UPDATE steps)
+  const responseText = extractFinalResponse(data.messages)
 
-  if (!responseText) {
-    throw new Error('No response text found in agent output')
-  }
+  // Reasoning chain — search queries, docs read, steps taken
+  const reasoningChain = extractReasoningChain(data.messages)
 
   return {
     caseId,
     query,
     response: responseText,
     latencyMs,
-    totalTokens: undefined,  // Token counts require getworkflowtrace (not yet accessible)
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     traceId,
+    reasoningChain: reasoningChain.length > 0 ? reasoningChain : undefined,
     timestamp: new Date(),
   }
 }
 
 /**
- * Extract tool call information from message fragments
- * The runworkflow response embeds action metadata in fragments
+ * Extract final response text from CONTENT-type messages only
+ * Skips intermediate UPDATE messages (search queries, "Searching...", etc.)
+ */
+function extractFinalResponse(messages: RunWorkflowMessage[]): string {
+  const contentMessages = messages.filter(
+    m => m.author === 'GLEAN_AI' && m.messageType === 'CONTENT'
+  )
+
+  const texts = contentMessages
+    .flatMap(m => m.fragments || [])
+    .map(f => f.text)
+    .filter(t => t)
+    .join('')
+
+  if (!texts) {
+    // Fallback: try all GLEAN_AI messages if no CONTENT type found
+    const fallback = messages
+      .filter(m => m.author === 'GLEAN_AI')
+      .flatMap(m => m.fragments || [])
+      .map(f => f.text)
+      .filter(t => t)
+      .join('')
+
+    if (!fallback) throw new Error('No response text found in agent output')
+    return fallback
+  }
+
+  return texts
+}
+
+/**
+ * Extract tool calls from action fragments
  */
 function extractToolCalls(messages: RunWorkflowMessage[]): any[] {
   const toolCalls: any[] = []
 
   for (const msg of messages) {
     if (msg.author !== 'GLEAN_AI') continue
-
-    for (const fragment of msg.fragments || []) {
-      if (fragment.action?.metadata) {
-        const meta = fragment.action.metadata
+    for (const frag of msg.fragments || []) {
+      if (frag.action?.metadata) {
+        const meta = frag.action.metadata
         toolCalls.push({
           name: meta.displayName || meta.name || 'unknown',
           type: meta.type,
@@ -184,4 +200,53 @@ function extractToolCalls(messages: RunWorkflowMessage[]): any[] {
   }
 
   return toolCalls
+}
+
+/**
+ * Extract the reasoning chain — what the agent searched, read, and how it got to the answer
+ */
+function extractReasoningChain(messages: RunWorkflowMessage[]): any[] {
+  const steps: any[] = []
+
+  for (const msg of messages) {
+    if (msg.author !== 'GLEAN_AI' || msg.messageType !== 'UPDATE') continue
+
+    const step: any = { stepId: msg.stepId }
+
+    // Collect search queries
+    const queries = msg.fragments
+      ?.filter(f => f.querySuggestion?.query)
+      .map(f => f.querySuggestion!.query!) || []
+
+    if (queries.length > 0) {
+      step.type = 'search'
+      step.queries = queries
+    }
+
+    // Collect documents read
+    const docs = msg.fragments
+      ?.filter(f => f.structuredResults)
+      .flatMap(f => f.structuredResults!)
+      .filter(r => r.document)
+      .map(r => ({ title: r.document!.title, url: r.document!.url })) || []
+
+    if (docs.length > 0) {
+      step.type = step.type || 'read'
+      step.documentsRead = docs
+    }
+
+    // Collect action metadata
+    const action = msg.fragments?.find(f => f.action?.metadata)
+    if (action?.action?.metadata) {
+      step.action = action.action.metadata.displayName || action.action.metadata.name
+      step.type = step.type || 'action'
+    }
+
+    // Only include steps that have meaningful content
+    if (step.type) {
+      steps.push(step)
+    }
+  }
+
+  return steps
 }
