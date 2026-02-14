@@ -1,0 +1,92 @@
+import { NextResponse } from 'next/server'
+import { db, evalCases } from '@/lib/db'
+import { nanoid } from 'nanoid'
+import { eq } from 'drizzle-orm'
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json()
+    const { evalSetId, query, expectedAnswer, context } = body
+
+    if (!evalSetId || !query) {
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      )
+    }
+
+    // Generate CLI-safe ID
+    let id = nanoid(12)
+    while (id.startsWith('-')) {
+      id = nanoid(12)
+    }
+
+    const newCase = await db.insert(evalCases).values({
+      id,
+      evalSetId,
+      query,
+      expectedAnswer: expectedAnswer || null,
+      context: context || null,
+      createdAt: new Date(),
+    }).returning()
+
+    return NextResponse.json(newCase[0], { status: 201 })
+  } catch (error) {
+    console.error('Error creating eval case:', error)
+    return NextResponse.json(
+      { error: 'Failed to create eval case' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json()
+    const { id, query, expectedAnswer, context } = body
+
+    if (!id) {
+      return NextResponse.json({ error: 'Missing case ID' }, { status: 400 })
+    }
+
+    const updates: any = {}
+    if (query !== undefined) updates.query = query
+    if (expectedAnswer !== undefined) updates.expectedAnswer = expectedAnswer
+    if (context !== undefined) updates.context = context
+
+    const updated = await db
+      .update(evalCases)
+      .set(updates)
+      .where(eq(evalCases.id, id))
+      .returning()
+
+    return NextResponse.json(updated[0])
+  } catch (error) {
+    console.error('Error updating eval case:', error)
+    return NextResponse.json(
+      { error: 'Failed to update eval case' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const id = searchParams.get('id')
+
+    if (!id) {
+      return NextResponse.json({ error: 'Missing case ID' }, { status: 400 })
+    }
+
+    await db.delete(evalCases).where(eq(evalCases.id, id))
+
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    console.error('Error deleting eval case:', error)
+    return NextResponse.json(
+      { error: 'Failed to delete eval case' },
+      { status: 500 }
+    )
+  }
+}

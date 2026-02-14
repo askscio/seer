@@ -4,6 +4,17 @@
 
 ---
 
+## Project Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [architecture.md](./architecture.md) | System architecture, component design, data flow |
+| [features.md](./features.md) | Feature tracking, development log, roadmap |
+| [issues.md](./issues.md) | Bug tracking, technical debt, known limitations |
+| [resources.md](./resources.md) | **This file** - Glean API integration guide |
+
+---
+
 ## Overview
 
 Seer uses **two different Glean APIs** for different purposes:

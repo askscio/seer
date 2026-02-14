@@ -14,7 +14,7 @@ import { extractMetric } from './metrics'
 
 // Initialize Glean SDK client for chat/judge calls
 const glean = new Glean({
-  apiToken: config.gleanChatApiKey,
+  apiToken: config.gleanApiKey,
   instance: config.gleanInstance
 })
 

@@ -1,34 +1,28 @@
 /**
- * Smart eval set generation agent
+ * Smart eval set generation using Glean's ADVANCED toolkit agent
  *
- * Uses Glean Chat's built-in search grounding to:
- * 1. Find realistic input values based on the agent's schema
- * 2. For each input, search for source material the agent would use
- * 3. Generate expected outputs grounded in actual documents
+ * Uses raw fetch (not SDK) because the SDK doesn't support the ADVANCED
+ * agent mode yet. The ADVANCED agent has company tools enabled (search,
+ * people, CRM, etc.) and can find real data to ground eval cases.
  *
- * The Glean Chat API internally searches company knowledge when answering,
- * so each call effectively does search + reasoning.
+ * Two-phase approach:
+ * 1. Ask the agent to find realistic input values for the agent's schema
+ * 2. For each input, ask the agent what a good output should look like
  */
 
-import { Glean } from '@gleanwork/api-client'
 import { config } from './config'
-
-const glean = new Glean({
-  apiToken: config.gleanChatApiKey,
-  instance: config.gleanInstance,
-})
 
 export interface SmartGenerateRequest {
   agentId: string
   agentName: string
   agentDescription: string
-  schema: any  // Agent schema from /agents/{id}/schemas
+  schema: any
   count: number
 }
 
 export interface SmartGeneratedCase {
-  input: Record<string, string>  // Structured field values, NOT prompt strings
-  query: string                  // Human-readable version for display
+  input: Record<string, string>
+  query: string
   expectedAnswer: string
 }
 
@@ -39,7 +33,45 @@ export interface SmartGeneratedEvalSet {
 }
 
 /**
- * Generate a grounded eval set using agentic search + chat
+ * Call Glean's ADVANCED chat agent with company tools enabled
+ */
+async function askAgent(query: string): Promise<string> {
+  const resp = await fetch(`${config.gleanBackend}/rest/api/v1/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.gleanApiKey}`,
+    },
+    body: JSON.stringify({
+      messages: [{ fragments: [{ text: query }] }],
+      agentConfig: {
+        agent: 'ADVANCED',
+        toolSets: { enableCompanyTools: true },
+      },
+      saveChat: false,
+      timeoutMillis: 60000,
+    }),
+  })
+
+  if (!resp.ok) {
+    const err = await resp.text()
+    throw new Error(`Chat API error: ${resp.status} - ${err}`)
+  }
+
+  const data = await resp.json() as any
+  let text = ''
+  for (const msg of data.messages ?? []) {
+    if (msg.author === 'GLEAN_AI' && msg.messageType === 'CONTENT') {
+      for (const f of msg.fragments ?? []) {
+        if (f.text) text += f.text
+      }
+    }
+  }
+  return text
+}
+
+/**
+ * Generate a grounded eval set
  */
 export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGeneratedEvalSet> {
   const { agentId, agentName, agentDescription, schema, count } = req
@@ -50,10 +82,10 @@ export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGen
   console.log(`\n🤖 Smart generation for "${agentName}"`)
   console.log(`   Schema: ${hasFormInputs ? inputFields.join(', ') : 'chat-style'}`)
 
-  // Step 1: Find realistic input values
+  // Step 1: Find realistic input values using company tools
   console.log(`\n1️⃣  Finding realistic inputs...`)
   const candidateInputs = await findRealisticInputs(
-    agentName, agentDescription, inputSchema, inputFields, count
+    agentName, agentDescription, inputFields, count
   )
   console.log(`   Found ${candidateInputs.length} candidates`)
 
@@ -63,194 +95,90 @@ export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGen
 
   for (let i = 0; i < candidateInputs.length; i++) {
     const input = candidateInputs[i]
-    console.log(`   [${i + 1}/${candidateInputs.length}] ${JSON.stringify(input).slice(0, 60)}...`)
+    const displayVal = Object.values(input)[0] || ''
+    console.log(`   [${i + 1}/${candidateInputs.length}] ${displayVal}`)
 
-    const expected = await generateExpectedOutput(
-      agentName, agentDescription, input, inputFields
-    )
+    const expected = await generateExpectedOutput(agentName, agentDescription, input)
 
-    // Build human-readable query from structured input
     const query = hasFormInputs
-      ? Object.entries(input).map(([k, v]) => `${k}: ${v}`).join(', ')
-      : input[inputFields[0]] || Object.values(input)[0]
+      ? Object.values(input)[0] || ''  // For single-field forms, just the value
+      : input.query || Object.values(input)[0] || ''
 
     cases.push({ input, query, expectedAnswer: expected })
   }
 
   return {
     name: agentName,
-    description: `Grounded evaluation of "${agentName}" with ${cases.length} test cases generated from company data.`,
+    description: `Evaluation of "${agentName}" with ${cases.length} test cases grounded in company data.`,
     cases,
   }
 }
 
 /**
- * Step 1: Use Glean Chat to find realistic input values
- * Chat internally searches company knowledge to ground its suggestions
+ * Step 1: Find realistic input values using ADVANCED agent with company tools
  */
 async function findRealisticInputs(
   agentName: string,
   agentDescription: string,
-  inputSchema: Record<string, any>,
   inputFields: string[],
   count: number
 ): Promise<Record<string, string>[]> {
-  const hasFormInputs = inputFields.length > 0
+  const fieldName = inputFields[0] || 'query'
 
-  // Build schema description
-  let schemaDesc = ''
-  if (hasFormInputs) {
-    for (const [field, conf] of Object.entries(inputSchema)) {
-      const c = conf as any
-      schemaDesc += `- "${field}" (${c.type || 'string'})`
-      if (c.description) schemaDesc += `: ${c.description}`
-      if (c.enum) schemaDesc += ` [options: ${c.enum.join(', ')}]`
-      schemaDesc += '\n'
-    }
-  }
-
-  const prompt = hasFormInputs
-    ? `I need to test a Glean agent called "${agentName}".
+  const text = await askAgent(
+    `I'm testing a Glean agent called "${agentName}".
 Description: ${agentDescription}
 
-It takes these form inputs:
-${schemaDesc}
+It takes a form input field called "${fieldName}".
 
-Search through our company's data and find ${count} REAL, DIVERSE values I can use to test this agent.
-
-For example, if the field is "account name", find actual customer/account names from our CRM, deals, kickoff decks, or success plans.
-If the field is "employee name", find real people.
-If the field is "query", generate realistic questions our users would ask.
+Search our company data (CRM, success plans, accounts, etc.) and give me exactly ${count} real, diverse values for "${fieldName}" that I can use to test this agent.
 
 Include a mix of:
-- Common/well-known values (should produce good results)
-- Edge cases (misspellings, unusual capitalization)
-- Boundary cases (internal accounts, non-existent values)
+- Well-known values that should produce good results
+- At least 1 edge case (misspelling, unusual casing, or abbreviation)
+- At least 1 boundary case (internal/test account or non-existent value)
 
-Return ONLY the values, one per line, in this exact format:
-${inputFields.map(f => `${f}: [value]`).join(' | ')}
+Return ONLY a plain numbered list. No explanations, no markdown formatting, no bullets. Just:
+1. Value one
+2. Value two
+...`
+  )
 
-Return exactly ${count} lines, nothing else.`
+  // Parse numbered list
+  const lines = text.split('\n')
+    .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())  // Strip "1. " or "1) " prefix
+    .filter(l => l.length > 0 && !l.startsWith('---'))
+    .slice(0, count)
 
-    : `I need to test a Glean agent called "${agentName}".
-Description: ${agentDescription}
-
-Generate ${count} realistic test queries that someone at this company would actually ask this agent.
-Search our company data to ground these in real scenarios.
-
-Include a mix of:
-- Common questions (should produce good results)
-- Specific questions referencing real projects/products/people
-- Edge cases (vague queries, misspellings)
-
-Return ONLY the queries, one per line. No numbering, no labels. Exactly ${count} lines.`
-
-  const response = await glean.client.chat.create({
-    messages: [{ author: 'USER', fragments: [{ text: prompt }] }],
-    saveChat: false,
-  })
-
-  const text = extractText(response)
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
-
-  // Parse into structured inputs
-  if (hasFormInputs && inputFields.length === 1) {
-    // Single field: each line is the value (strip any label prefix)
-    return lines.slice(0, count).map(line => {
-      const value = line.replace(new RegExp(`^${inputFields[0]}:\\s*`, 'i'), '').trim()
-      return { [inputFields[0]]: value }
-    })
-  }
-
-  if (hasFormInputs && inputFields.length > 1) {
-    // Multiple fields: parse "field1: val | field2: val" format
-    return lines.slice(0, count).map(line => {
-      const input: Record<string, string> = {}
-      const parts = line.split('|').map(p => p.trim())
-      for (const part of parts) {
-        const colonIdx = part.indexOf(':')
-        if (colonIdx > 0) {
-          const key = part.slice(0, colonIdx).trim()
-          const val = part.slice(colonIdx + 1).trim()
-          // Match to closest field name
-          const matchedField = inputFields.find(
-            f => f.toLowerCase() === key.toLowerCase()
-          ) || inputFields[0]
-          input[matchedField] = val
-        }
-      }
-      // Fill in any missing fields
-      for (const f of inputFields) {
-        if (!input[f]) input[f] = ''
-      }
-      return input
-    })
-  }
-
-  // Chat-style: each line is a query
-  return lines.slice(0, count).map(line => ({ query: line }))
+  return lines.map(val => ({ [fieldName]: val }))
 }
 
 /**
- * Step 2: Generate a grounded expected output for a specific input
- * Uses Glean Chat to search for what the agent would find, then describe expected output
+ * Step 2: Generate expected output for a specific input using ADVANCED agent
  */
 async function generateExpectedOutput(
   agentName: string,
   agentDescription: string,
-  input: Record<string, string>,
-  inputFields: string[]
+  input: Record<string, string>
 ): Promise<string> {
   const inputStr = Object.entries(input)
     .map(([k, v]) => `${k}: "${v}"`)
     .join(', ')
 
-  const prompt = `I'm testing a Glean agent called "${agentName}".
+  const text = await askAgent(
+    `I'm testing a Glean agent called "${agentName}".
 Description: ${agentDescription}
 
 The agent was given this input: ${inputStr}
 
-Search our company's documents to find materials related to this input.
-Based on what you find, describe what a GOOD response from this agent should look like.
-
-Be specific:
-- What topics/themes should the response cover?
-- What documents or data sources should it reference?
-- What format should the output be in?
+Search our company's documents for materials related to this input. Then describe what a GOOD response from this agent should look like in 3-5 sentences:
+- What topics/themes should it cover based on what you found?
+- What sources should it reference?
 - What would make the response WRONG or hallucinated?
+- If no relevant data exists, say the expected behavior is "agent should state no data found."
 
-If you cannot find relevant data for this input, say so — the expected behavior might be "agent should state no data found" rather than making things up.
+Be specific and concrete. No generic advice.`
+  )
 
-Keep your response to 3-5 sentences. Be concrete, not generic.`
-
-  const response = await glean.client.chat.create({
-    messages: [{ author: 'USER', fragments: [{ text: prompt }] }],
-    saveChat: false,
-  })
-
-  return extractText(response).trim()
-}
-
-/**
- * Extract only CONTENT text from Glean chat response
- * Skips UPDATE messages (search queries, "Searching...", etc.)
- */
-function extractText(response: any): string {
-  // First try CONTENT messages only (final answer)
-  const contentText = response.messages
-    ?.filter((m: any) => m.author === 'GLEAN_AI' && m.messageType === 'CONTENT')
-    .flatMap((m: any) => m.fragments || [])
-    .map((f: any) => f.text)
-    .filter((t: any) => t)
-    .join('') || ''
-
-  if (contentText) return contentText
-
-  // Fallback: all GLEAN_AI messages
-  return response.messages
-    ?.filter((m: any) => m.author === 'GLEAN_AI')
-    .flatMap((m: any) => m.fragments || [])
-    .map((f: any) => f.text)
-    .filter((t: any) => t)
-    .join('') || ''
+  return text.trim()
 }

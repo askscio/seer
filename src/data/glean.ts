@@ -54,7 +54,7 @@ async function getAgentSchema(agentId: string): Promise<AgentSchema> {
 
   const resp = await fetch(
     `${config.gleanBackend}/rest/api/v1/agents/${agentId}/schemas`,
-    { headers: { 'Authorization': `Bearer ${config.gleanAgentApiKey}` } }
+    { headers: { 'Authorization': `Bearer ${config.gleanApiKey}` } }
   )
 
   if (!resp.ok) {
@@ -102,7 +102,7 @@ export async function runAgent(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.gleanChatApiKey}`,
+        'Authorization': `Bearer ${config.gleanApiKey}`,
       },
       body: JSON.stringify(payload),
     }

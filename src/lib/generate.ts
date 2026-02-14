@@ -2,7 +2,7 @@ import { Glean } from '@gleanwork/api-client'
 import { config } from './config'
 
 const glean = new Glean({
-  apiToken: config.gleanChatApiKey,
+  apiToken: config.gleanApiKey,
   instance: config.gleanInstance
 })
 

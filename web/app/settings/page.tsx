@@ -4,8 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 
 interface Settings {
-  gleanAgentApiKey?: string
-  gleanChatApiKey?: string
+  gleanApiKey?: string
   gleanBackend?: string
   gleanInstance?: string
 }
@@ -53,7 +52,7 @@ export default function SettingsPage() {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${settings.gleanAgentApiKey}`,
+            'Authorization': `Bearer ${settings.gleanApiKey}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ name: '' }),
@@ -92,17 +91,10 @@ export default function SettingsPage() {
       type: 'text',
     },
     {
-      key: 'gleanAgentApiKey' as keyof Settings,
-      label: 'Agent API Key',
-      placeholder: 'Your agent API key',
-      description: 'Used for agent schema fetches. Any scope works.',
-      type: 'password',
-    },
-    {
-      key: 'gleanChatApiKey' as keyof Settings,
-      label: 'Chat API Key (CHAT scope)',
-      placeholder: 'Your CHAT-scoped API key',
-      description: 'Used for agent execution, trace metadata, and judge calls. Must have CHAT scope.',
+      key: 'gleanApiKey' as keyof Settings,
+      label: 'API Key',
+      placeholder: 'Your Glean API key',
+      description: 'Needs chat + search + agents scopes. Create at Glean Settings > API > REST API tokens.',
       type: 'password',
     },
   ]

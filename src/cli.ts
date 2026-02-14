@@ -447,7 +447,7 @@ program
         `${config.gleanBackend}/rest/api/v1/agents/${agentId}/schemas`,
         {
           headers: {
-            'Authorization': `Bearer ${config.gleanAgentApiKey}`
+            'Authorization': `Bearer ${config.gleanApiKey}`
           }
         }
       )
