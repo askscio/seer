@@ -2,26 +2,23 @@
 
 **Agent evaluation framework for Glean agents using LLM-as-judge methodology**
 
-Seer evaluates AI agents built in Glean's Agent Builder. It runs agents, scores their responses using LLM-as-judge, and tracks results over time. Eval sets can be generated automatically from your company's data.
+Seer evaluates AI agents built in Glean's Agent Builder. It runs agents, scores their responses across multiple dimensions using a research-backed judge architecture, and tracks results over time.
 
 ## Setup
 
 ```bash
 bun install
 
-# Create .env with your Glean API key
 cp .env.example .env
-# Edit .env — you need a single GLEAN_API_KEY with chat + search + agents scopes
+# Add your GLEAN_API_KEY (needs chat + search + agents scopes)
 
-# Initialize database
 bun run db:push
 ```
 
-### Web UI (Optional)
+### Web UI
 
 ```bash
 cd web && bun install && bun run dev
-# Open http://localhost:3000
 ```
 
 ## Quick Start
@@ -32,18 +29,20 @@ cd web && bun install && bun run dev
 bun run src/cli.ts generate <agent-id> --count 5
 ```
 
-This uses Glean's ADVANCED agent with company search tools to:
-- Find real input values from your CRM/documents (e.g., actual account names)
-- Generate expected outputs grounded in what the agent should find
-- Present results for review before saving
+Uses Glean's ADVANCED agent with company search to find real input values from your CRM/documents and generate grounded evaluation guidance.
 
 ### 2. Run evaluation
 
 ```bash
-bun run src/cli.ts run <set-id> --criteria task_success,factuality,relevance
-```
+# Quick mode (coverage + faithfulness, 2 judge calls/case)
+bun run src/cli.ts run <set-id>
 
-Each case: runs the agent → scores the response with LLM-as-judge → stores results.
+# Deep mode (+ factuality verification via company search)
+bun run src/cli.ts run <set-id> --deep
+
+# Multi-judge (Opus 4.6 + GPT-5)
+bun run src/cli.ts run <set-id> --multi-judge
+```
 
 ### 3. View results
 
@@ -51,35 +50,33 @@ Each case: runs the agent → scores the response with LLM-as-judge → stores r
 bun run src/cli.ts results <run-id>
 ```
 
-Or open the Web UI to see formatted results with markdown rendering.
+Or use the Web UI for formatted results with markdown rendering and research-backed tooltips.
 
-## What You Get Per Eval Run
+## How Scoring Works
 
-| Metric | Source |
-|--------|--------|
-| Response text | Agent execution via `/rest/api/v1/runworkflow` |
-| Latency | Client-side timer |
-| Trace ID | `workflowTraceId` from runworkflow response |
-| Tool calls | Action metadata in message fragments |
-| Reasoning chain | Search queries, docs read, step flow |
-| Judge scores | LLM-as-judge via Glean Chat |
-| Judge reasoning | Detailed explanations per criterion |
+Three judge calls, each measuring something different:
 
-**Known limitation:** Token counts (input/output per LLM call) are not available through the REST API. See `docs/TRACE_API_LIMITATIONS.md`.
+| Call | Dimensions | What it checks against | Needs expected answer? |
+|------|-----------|----------------------|----------------------|
+| **Coverage** | Topical Coverage, Response Quality | Eval guidance (themes to cover) | Yes |
+| **Faithfulness** | Groundedness, Hallucination Risk | Agent's own retrieved documents | No |
+| **Factuality** | Factual Accuracy | Live company data (judge searches independently) | No |
 
-## Scoring Criteria
+**Categorical scale** (not 1-10): `full` → `substantial` → `partial` → `minimal` → `failure`
 
-| Criterion | Type | Description |
-|-----------|------|-------------|
-| `task_success` | Continuous (0-10) | Did the agent complete the task? |
-| `factuality` | Continuous (0-10) | Is the response grounded in sources? |
-| `relevance` | Continuous (0-10) | How relevant to the query? |
-| `prompt_adherence` | Continuous (0-10) | Did it follow instructions? |
-| `completeness` | Categorical | complete / partial / incomplete |
-| `uses_correct_tools` | Binary | Did it use the right tools? |
-| `safe_output` | Binary | Is the output safe? |
-| `latency` | Metric | Response time (ms) |
-| `tool_call_count` | Metric | Number of tool invocations |
+Categories are 15% more reliable than continuous scales (SJT research). The judge commits to a defined bucket instead of picking an arbitrary number.
+
+## Configuration
+
+### Option A: Settings UI
+Open `/settings` in the web UI. Saves to `data/settings.json`.
+
+### Option B: .env file
+```bash
+GLEAN_API_KEY=your_key_here
+GLEAN_BACKEND=https://scio-prod-be.glean.com
+GLEAN_INSTANCE=scio-prod
+```
 
 ## Commands
 
@@ -94,45 +91,24 @@ bun run src/cli.ts list sets
 bun run src/cli.ts generate <agent-id> --count <n>
 
 # Run & results
-bun run src/cli.ts run <set-id> --criteria <list>
+bun run src/cli.ts run <set-id> [--deep] [--multi-judge]
 bun run src/cli.ts results <run-id>
 bun run src/cli.ts list runs
-```
-
-## Configuration
-
-### Option A: Settings UI (recommended)
-Open `/settings` in the web UI and enter your API key.
-Saves to `data/settings.json` — shared between CLI and web.
-
-### Option B: .env file
-```bash
-GLEAN_API_KEY=your_key_here  # Needs chat + search + agents scopes
-GLEAN_BACKEND=https://scio-prod-be.glean.com
-GLEAN_INSTANCE=scio-prod
 ```
 
 ## Architecture
 
 ```
-CLI (Commander.js)  ←→  Shared SQLite  ←→  Web UI (Next.js)
-                            ↓
-                      Eval Engine
-                    ├── Agent Runner    (runworkflow API)
-                    ├── Smart Generator (ADVANCED agent + company tools)
-                    ├── Judge           (Glean Chat LLM-as-judge)
-                    └── Metrics         (latency, tool calls)
+CLI ←→ Shared SQLite ←→ Web UI
+              ↓
+        Eval Engine
+      ├── Agent Runner    (runworkflow API)
+      ├── Smart Generator (ADVANCED agent + company tools)
+      ├── Judge           (3-call architecture, Opus 4.6)
+      └── Metrics         (latency, tool calls)
 ```
 
-See `docs/architecture.md` for the full system design.
-
-## Development
-
-```bash
-bun run db:generate  # Generate migrations
-bun run db:push      # Apply schema
-bun run db:studio    # Open Drizzle Studio
-```
+See `docs/evaluation-framework.md` for the full evaluation philosophy and `docs/architecture.md` for system design.
 
 ## License
 

@@ -1,30 +1,36 @@
 # Seer: Agent Evaluation Framework
 
-**Purpose:** Systematic evaluation of Glean agents using LLM-as-judge methodology.
+**Purpose:** Systematic evaluation of Glean agents using method-aware LLM-as-judge scoring.
 
 ## What This Is
 
-Seer evaluates AI agents built in Glean's Agent Builder through:
-- **LLM-as-judge scoring** across multiple dimensions (task success, factuality, relevance)
-- **Smart eval generation** using Glean's ADVANCED toolkit agent with company search
+Seer evaluates AI agents built in Glean's Agent Builder:
+- **Three-call judge architecture** — coverage (reference-based), faithfulness (reference-free), factuality (search-verified)
+- **Categorical scoring** — full/substantial/partial/minimal/failure (15% more reliable than 0-10 scales, per SJT research)
+- **Multi-judge ensemble** — Opus 4.6, GPT-5, Gemini with majority vote aggregation
+- **Smart eval generation** — ADVANCED toolkit agent with company search finds real inputs from CRM/docs
 - **Full execution traces** — trace IDs, tool calls, reasoning chains from runworkflow
 - **Shared architecture** — CLI and Web UI read/write the same SQLite database
+- **Glean-branded UI** — DM Sans/Mono, Electric Blue, oatmeal backgrounds, research-backed tooltips
 
 ## Architecture
 
 ```
 User Interface
 ├── CLI (Commander.js + Bun)
-└── Web UI (Next.js + Tailwind)
+└── Web UI (Next.js + Tailwind + DM Sans)
     ↓
-Shared SQLite (Drizzle ORM)
+Shared SQLite (Drizzle ORM — 6 tables)
     ↓
 Eval Engine
-├── Agent Runner       POST /rest/api/v1/runworkflow (CHAT-scoped key)
+├── Agent Runner       POST /rest/api/v1/runworkflow
 │   └── Returns: response, traceId, toolCalls, reasoningChain
-├── Smart Generator    POST /rest/api/v1/chat (ADVANCED agent + company tools)
-│   └── Finds real inputs from CRM, generates grounded expected outputs
-├── Judge              Glean Chat API (LLM-as-judge via Glean)
+├── Smart Generator    POST /rest/api/v1/chat (ADVANCED + company tools)
+│   └── Finds real inputs, generates grounded eval guidance
+├── Judge              POST /rest/api/v1/chat (Opus 4.6 via modelSetId)
+│   ├── Call 1: Coverage    — reference-based, scores against eval guidance
+│   ├── Call 2: Faithfulness — reference-free, scores against agent's own retrieval
+│   └── Call 3: Factuality  — search-verified, ADVANCED agent verifies claims
 └── Metrics            Latency (client-side), tool call count
 ```
 
@@ -32,23 +38,40 @@ Eval Engine
 
 **Single API key** (`GLEAN_API_KEY`) with chat + search + agents scopes.
 
-| Endpoint | Auth | Purpose |
-|----------|------|---------|
-| `/rest/api/v1/runworkflow` | Bearer (CHAT scope) | Agent execution + trace metadata |
-| `/rest/api/v1/chat` | Bearer (CHAT scope) | Judge calls + smart generation (ADVANCED agent) |
-| `/rest/api/v1/agents/{id}/schemas` | Bearer | Schema fetch for form/chat detection |
-| `/rest/api/v1/agents/{id}` | Bearer | Agent name + description |
+| Endpoint | Purpose |
+|----------|---------|
+| `/rest/api/v1/runworkflow` | Agent execution with trace metadata |
+| `/rest/api/v1/chat` | Judge calls (modelSetId: OPUS_4_6_VERTEX / GPT_5 / ADVANCED) |
+| `/rest/api/v1/chat` + ADVANCED | Smart generation + factuality verification |
+| `/rest/api/v1/agents/{id}/schemas` | Schema fetch (form vs chat detection) |
+| `/rest/api/v1/agents/{id}` | Agent name + description |
 
-**Internal API note:** `/rest/api/v1/runworkflow` uses `workflowId` (not `agent_id`), `fields` (not `input`), `author`/`fragments` (not `role`/`content`), and `enableTrace: true`.
+**Payload notes:** `runworkflow` uses `workflowId` (not `agent_id`), `fields` (not `input`), `author`/`fragments` (not `role`/`content`), `enableTrace: true`.
 
-**Token counts** not available via REST API. See `docs/TRACE_API_LIMITATIONS.md`.
+**Token counts** not available via REST API (FR-2147). See `docs/TRACE_API_LIMITATIONS.md`.
+
+## Evaluation Dimensions
+
+7 dimensions organized by judge call type:
+
+| Dimension | Type | Judge Call | Reference |
+|-----------|------|-----------|-----------|
+| Topical Coverage | Categorical | Coverage | Eval guidance (themes) |
+| Response Quality | Categorical | Coverage | Eval guidance |
+| Groundedness | Categorical | Faithfulness | Agent's reasoning chain |
+| Hallucination Risk | Binary | Faithfulness | Agent's reasoning chain |
+| Factual Accuracy | Categorical | Factuality | Live company search |
+| Latency | Metric | Direct | Client timer |
+| Tool Calls | Metric | Direct | Execution data |
+
+Categorical scale: `full` (10) → `substantial` (7.5) → `partial` (5) → `minimal` (2.5) → `failure` (0)
 
 ## File Organization
 
 ```
 src/
-├── cli.ts                  # Commander.js commands
-├── types.ts                # Core domain types
+├── cli.ts                  # CLI commands (run, generate, results, list, set)
+├── types.ts                # Core domain types (AgentResult, JudgeScore, etc.)
 ├── db/
 │   ├── schema.ts           # Drizzle SQLite schema (6 tables)
 │   ├── index.ts            # DB connection + initialization
@@ -58,47 +81,73 @@ src/
 ├── lib/
 │   ├── config.ts           # Config: settings.json → .env → error
 │   ├── generate-agent.ts   # Smart generation (ADVANCED agent + company tools)
-│   ├── generate.ts         # Legacy generation (Glean Chat SDK)
+│   ├── generate.ts         # Legacy generation (Glean Chat SDK, unused)
 │   ├── fetch-agent.ts      # Agent info fetcher
-│   ├── judge.ts            # LLM-as-judge (Glean Chat)
+│   ├── judge.ts            # Three-call judge with multi-model ensemble
 │   ├── metrics.ts          # Direct metric extraction
 │   └── id.ts               # ID generation (nanoid)
 ├── criteria/
-│   └── defaults.ts         # 10 default criteria definitions
+│   └── defaults.ts         # 7 dimension definitions with categorical rubrics
 web/
 ├── app/                    # Next.js pages (dashboard, sets, runs, settings)
-├── components/             # UI components (ResultsTable, CaseTable, Markdown)
+├── components/             # UI (ResultsTable, CaseTable, Markdown, Tooltip, RunEvalModal)
 ├── lib/db.ts               # Shared SQLite access
 docs/
-├── architecture.md
-├── features.md
-├── issues.md
-├── resources.md
+├── evaluation-framework.md # Core eval philosophy and dimension design
+├── architecture.md         # System architecture and data flow
+├── features.md             # Feature tracking and roadmap
+├── resources.md            # Research references and API docs
+├── issues.md               # Bug tracking and known limitations
+├── frontend-design-spec.md # Glean-branded UI design spec
 ├── TRACE_API_LIMITATIONS.md
+├── guide-petri-judge-patterns.md
+├── guide-judge-best-practices.md
+├── guide-qa-judge-prompts.md
+├── research-dynamic-eval.md
 ```
 
 ## Key Design Decisions
 
-1. **Single API key** — Unified key replaces old split (agent key + chat key)
-2. **Raw fetch over SDK** — SDK doesn't support ADVANCED agent mode yet; raw fetch bypasses Zod validation
-3. **CONTENT vs UPDATE messages** — Final answers are `messageType: "CONTENT"`, intermediate reasoning is `messageType: "UPDATE"`
-4. **Schema caching** — Agent schemas cached per-run to avoid redundant API calls
-5. **Settings.json** — `data/settings.json` for config, with `.env` fallback. Settings UI at `/settings`
+1. **Categorical over continuous** — SJT research shows 15% reliability gain (Cavanagh, 2026)
+2. **Three separate judge calls** — each dimension needs different reference material (eval guidance vs reasoning chain vs live search)
+3. **Reference-free faithfulness** — immune to data staleness; checks response against agent's own retrieved docs
+4. **Raw fetch over SDK** — SDK doesn't support ADVANCED agent mode or modelSetId; raw fetch bypasses Zod validation
+5. **CONTENT vs UPDATE messages** — Final answers are `messageType: "CONTENT"`, reasoning is `messageType: "UPDATE"`
+6. **Multi-judge with majority vote** — cross-family panels reduce model-specific biases (Verga et al., 2024)
+7. **Eval guidance, not expected answers** — themes are stable over time even as facts change (FreshQA, Vu et al., 2023)
 
 ## Usage
 
 ```bash
-# Generate eval set (smart — searches company data for real inputs)
+# Generate eval set (finds real inputs from company data)
 bun run src/cli.ts generate <agent-id> --count 5
 
-# Run evaluation
-bun run src/cli.ts run <set-id> --criteria task_success,factuality,relevance
+# Quick eval (coverage + faithfulness, 2 judge calls/case)
+bun run src/cli.ts run <set-id>
+
+# Deep eval (+ factuality verification with company search)
+bun run src/cli.ts run <set-id> --deep
+
+# Multi-judge (Opus 4.6 + GPT-5)
+bun run src/cli.ts run <set-id> --multi-judge
 
 # View results
 bun run src/cli.ts results <run-id>
 
 # Web UI
-cd web && bun run dev  # http://localhost:3000
+cd web && bun run dev
 ```
 
--- Axon | 2026-02-13
+## Research Foundation
+
+| Source | What we adopted |
+|--------|----------------|
+| Cavanagh (2026) — LLM-as-Judge | Categorical scales, multi-judge panels, narrative-score decoupling awareness |
+| RAGAS (Shahul et al., 2023) | Faithfulness via claim decomposition against retrieved context |
+| G-Eval (Liu et al., 2023) | CoT-then-score (10-20% human correlation improvement) |
+| GER-Eval (Siro et al., 2025) | Judge unreliability in knowledge domains → search-verified factuality |
+| FreshQA (Vu et al., 2023) | Temporal volatility → eval guidance as themes, not exact answers |
+| Rubric RL (Wolfe, 2025) | Instance-specific rubrics (planned), implicit aggregation |
+| Verga et al. (2024) | Cross-family judge panels, ensemble reliability |
+
+-- Axon | 2026-02-18
