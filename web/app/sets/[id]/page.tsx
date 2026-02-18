@@ -3,6 +3,7 @@ import { eq, desc } from 'drizzle-orm'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import RunEvalButton from '@/components/RunEvalButton'
+import { InfoIcon } from '@/components/Tooltip'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,7 +90,10 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
         <div className="bg-white rounded-lg shadow-card border border-border p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <span className="text-xs font-medium text-cement uppercase tracking-wide">Latest Run</span>
+              <span className="text-xs font-medium text-cement uppercase tracking-wide">
+              Latest Run
+              <InfoIcon text="Scores are categorical (full/substantial/partial/minimal/failure) converted to 0-10 for display. Categorical scales show 15% higher reliability than continuous 1-10 scales (SJT research, Cavanagh 2026)." />
+            </span>
               <p className="text-sm text-cement mt-0.5">
                 {latestRun.completedAt
                   ? new Date(latestRun.completedAt).toLocaleString()
@@ -129,11 +133,21 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
             <div className="flex-1">
               {latestRun.criteria.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {latestRun.criteria.map((c: string) => (
-                    <span key={c} className="text-xs px-2 py-1 rounded-full bg-surface-page border border-border-subtle text-cement">
-                      {c.replace(/_/g, ' ')}
-                    </span>
-                  ))}
+                  {latestRun.criteria.map((c: string) => {
+                    const tooltips: Record<string, string> = {
+                      topical_coverage: 'Reference-based: decomposes eval guidance into themes (COVERED/TOUCHED/MISSING) and scores coverage ratio.',
+                      response_quality: 'Reference-based: evaluates structure, conciseness, and actionability independent of factual content.',
+                      groundedness: 'Reference-free: checks if claims are supported by docs the agent actually retrieved. No expected answer needed — immune to data staleness.',
+                      hallucination_risk: 'Reference-free: flags specific claims (names, numbers, dates) that lack source backing in the agent\'s reasoning chain.',
+                      factual_accuracy: 'Search-verified: judge independently searches company data to verify claims. Most expensive but catches factual errors other calls miss (Siro et al., GER-Eval).',
+                    }
+                    return (
+                      <span key={c} className="text-xs px-2 py-1 rounded-full bg-surface-page border border-border-subtle text-cement inline-flex items-center gap-0.5">
+                        {c.replace(/_/g, ' ')}
+                        {tooltips[c] && <InfoIcon text={tooltips[c]} wide />}
+                      </span>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -209,8 +223,9 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
                       <p className="text-sm text-[#1A1A1A]">{c.query}</p>
                       {c.expectedAnswer && (
                         <details className="mt-1.5">
-                          <summary className="text-xs text-cement cursor-pointer hover:text-[#1A1A1A]">
+                          <summary className="text-xs text-cement cursor-pointer hover:text-[#1A1A1A] inline-flex items-center gap-0.5">
                             Eval guidance
+                            <InfoIcon text="Theme guide for the coverage judge — not an exact answer to match. The judge decomposes this into topics and checks which ones the response covers. Themes are more stable than facts as company data changes (FreshQA, Vu et al. 2023)." wide />
                           </summary>
                           <p className="text-xs text-cement mt-1 leading-relaxed line-clamp-4">
                             {c.expectedAnswer}

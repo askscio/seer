@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useToast } from './ToastContainer'
+import { InfoIcon } from './Tooltip'
 
 interface RunEvalModalProps {
   evalSetId: string
@@ -140,6 +141,7 @@ export default function RunEvalModal({ evalSetId, onClose }: RunEvalModalProps) 
           <div>
             <label className="text-xs font-medium text-cement uppercase tracking-wide block mb-3">
               Evaluation Mode
+              <InfoIcon text="Each mode uses different judge calls. Quick checks themes + faithfulness (2 calls). Deep adds live fact-checking via company search (3 calls). Research shows LLM judges are unreliable for factual domains without tool grounding (Siro et al., GER-Eval)." wide />
             </label>
             <div className="grid grid-cols-3 gap-3">
               {(Object.entries(EVAL_MODES) as [EvalMode, typeof EVAL_MODES.quick][]).map(([key, m]) => (
@@ -215,6 +217,7 @@ export default function RunEvalModal({ evalSetId, onClose }: RunEvalModalProps) 
               <span className="ml-2 font-normal normal-case tracking-normal text-cement-light">
                 — select one or more
               </span>
+              <InfoIcon text="Cross-family panels (e.g. Anthropic + OpenAI + Google) have complementary error profiles — single judges show 3.4x over-flagging or miss 50% of issues. Multi-judge aggregates via majority vote (Verga et al., 2024; Cavanagh, 2026)." wide />
             </label>
             <div className="space-y-1.5">
               {JUDGE_MODELS.map(model => (

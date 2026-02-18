@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Markdown } from './Markdown'
+import { InfoIcon } from './Tooltip'
 
 interface Score {
   id: string
@@ -137,6 +138,9 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                   <span>{criterion.name}</span>
                   <span className="text-xs font-normal text-cement mt-1">
                     {criterion.scoreType}
+                    {criterion.scoreType === 'categorical' && (
+                      <InfoIcon text="Categorical scales (full/substantial/partial/minimal/failure) are 15% more reliable than 1-10 continuous scales. The judge commits to a defined bucket instead of picking an arbitrary number (SJT research)." />
+                    )}
                   </span>
                 </div>
               </th>
@@ -274,6 +278,7 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                         <div>
                           <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-3">
                             Judge Reasoning
+                            <InfoIcon text="Chain-of-thought reasoning produced BEFORE the score. Research shows CoT-then-score improves correlation with human judgment by 10-20% vs score-first approaches (G-Eval, Liu et al. 2023)." wide />
                           </label>
                           <div className="space-y-3">
                             {result.scores.map((score) => (
