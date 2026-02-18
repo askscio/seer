@@ -136,6 +136,7 @@ program
   .description('Run evaluation on an eval set')
   .option('--criteria <list>', 'Comma-separated criteria IDs', 'topical_coverage,response_quality,groundedness,hallucination_risk')
   .option('--deep', 'Include factual accuracy verification (uses company search)', false)
+  .option('--multi-judge', 'Run with multiple judge models (Opus 4.6 + GPT-5)', false)
   .action(async (setId, opts) => {
     try {
       // Get eval set
@@ -160,7 +161,9 @@ program
         return c
       })
 
-      const mode = opts.deep ? 'Deep (with factuality verification)' : 'Quick'
+      const mode = opts.deep
+        ? (opts.multiJudge ? 'Deep + Multi-Judge' : 'Deep (with factuality)')
+        : (opts.multiJudge ? 'Multi-Judge' : 'Quick')
 
       console.log(`\n🔍 Running evaluation: ${set.name}`)
       console.log(`   Agent: ${set.agentId}`)
@@ -202,26 +205,33 @@ program
             agentResult.response,
             agentResult,
             testCase.expectedAnswer || undefined,
+            opts.multiJudge,
           )
 
-          // 3. Calculate overall score (weighted average of continuous/binary scores only, exclude metrics)
-          const qualityScores = scores.filter(s => {
-            const criterion = getCriterion(s.criterionId)!
-            return s.scoreValue !== undefined && criterion.scoreType !== 'metric'
-          })
+          // 3. Calculate overall score (weighted average, converting categories to numeric)
+          let totalWeightedScore = 0
+          let totalWeight = 0
 
-          const weightedScores = qualityScores.map(s => {
-            const criterion = getCriterion(s.criterionId)!
-            return s.scoreValue! * criterion.weight
-          })
+          for (const score of scores) {
+            const criterion = getCriterion(score.criterionId)
+            if (!criterion || criterion.scoreType === 'metric') continue
 
-          const totalWeight = qualityScores.reduce((sum, s) => {
-            return sum + getCriterion(s.criterionId)!.weight
-          }, 0)
+            let numericValue: number | undefined
+            if (score.scoreValue !== undefined) {
+              // Binary scores: 0 or 1, scale to 0-10
+              numericValue = score.scoreValue * 10
+            } else if (score.scoreCategory && criterion.scaleConfig?.categoryValues) {
+              // Categorical scores: map to numeric
+              numericValue = criterion.scaleConfig.categoryValues[score.scoreCategory.toLowerCase()] ?? 0
+            }
 
-          const overallScore = totalWeight > 0
-            ? weightedScores.reduce((sum, s) => sum + s, 0) / totalWeight
-            : 0
+            if (numericValue !== undefined) {
+              totalWeightedScore += numericValue * criterion.weight
+              totalWeight += criterion.weight
+            }
+          }
+
+          const overallScore = totalWeight > 0 ? totalWeightedScore / totalWeight : 0
 
           // 4. Save result
           const resultId = generateId()
