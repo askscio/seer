@@ -3,24 +3,25 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+  * {
+    @apply border-border;
   }
-
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --background: 222.2 84% 4.9%;
-      --foreground: 210 40% 98%;
-    }
+  body {
+    @apply bg-surface-page text-[#1A1A1A] antialiased;
   }
 }
 
-@layer base {
-  * {
-    @apply border-gray-200;
-  }
-  body {
-    @apply bg-white text-gray-900;
+@layer components {
+  .prose-seer {
+    @apply prose prose-sm max-w-none;
+    --tw-prose-body: #1A1A1A;
+    --tw-prose-headings: #1A1A1A;
+    --tw-prose-links: #343CED;
+    --tw-prose-bold: #1A1A1A;
+    --tw-prose-counters: #777767;
+    --tw-prose-bullets: #A8A898;
+    --tw-prose-quotes: #777767;
+    --tw-prose-code: #1A1A1A;
+    --tw-prose-pre-bg: #F6F3EB;
   }
 }

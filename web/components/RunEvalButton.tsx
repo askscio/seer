@@ -26,7 +26,7 @@ export default function RunEvalButton({ evalSetId, hasCases }: RunEvalButtonProp
       <button
         onClick={handleClick}
         disabled={!hasCases}
-        className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+        className="px-4 py-2 text-sm font-medium bg-glean-blue text-white rounded-md hover:bg-glean-blue-hover disabled:bg-border disabled:text-cement-light disabled:cursor-not-allowed transition-colors"
       >
         ▶ Run Evaluation
       </button>

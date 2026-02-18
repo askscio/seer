@@ -68,33 +68,33 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
     <div>
       {/* Header */}
       <div className="mb-8">
-        <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
+        <div className="flex items-center gap-2 text-sm text-cement mb-2">
           <Link href="/" className="hover:text-gray-700">
             Dashboard
           </Link>
           <span>/</span>
-          <span className="text-gray-900">{evalSet.name}</span>
+          <span className="text-[#1A1A1A]">{evalSet.name}</span>
         </div>
-        <h1 className="text-3xl font-bold text-gray-900">{evalSet.name}</h1>
-        <p className="text-gray-600 mt-1">{evalSet.description}</p>
+        <h1 className="text-2xl font-semibold text-[#1A1A1A]">{evalSet.name}</h1>
+        <p className="text-cement mt-1">{evalSet.description}</p>
       </div>
 
       {/* Metadata */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 mb-8">
+      <div className="bg-white rounded-lg border border-border p-6 mb-8">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div>
-            <span className="text-sm text-gray-500">Agent ID</span>
-            <p className="text-gray-900 font-mono text-sm mt-1">{evalSet.agentId}</p>
+            <span className="text-sm text-cement">Agent ID</span>
+            <p className="text-[#1A1A1A] font-mono text-sm mt-1">{evalSet.agentId}</p>
           </div>
           <div>
-            <span className="text-sm text-gray-500">Test Cases</span>
-            <p className="text-gray-900 font-semibold text-2xl mt-1">
+            <span className="text-sm text-cement">Test Cases</span>
+            <p className="text-[#1A1A1A] font-semibold text-2xl mt-1">
               {evalSet.cases.length}
             </p>
           </div>
           <div>
-            <span className="text-sm text-gray-500">Created</span>
-            <p className="text-gray-900 mt-1">
+            <span className="text-sm text-cement">Created</span>
+            <p className="text-[#1A1A1A] mt-1">
               {new Date(evalSet.createdAt).toLocaleDateString()}
             </p>
           </div>
@@ -102,10 +102,10 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
       </div>
 
       {/* Test Cases */}
-      <div className="bg-white rounded-lg border border-gray-200 mb-8">
-        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-900">Test Cases</h2>
-          <button className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+      <div className="bg-white rounded-lg border border-border mb-8">
+        <div className="flex justify-between items-center px-6 py-4 border-b border-border">
+          <h2 className="text-xl font-semibold text-[#1A1A1A]">Test Cases</h2>
+          <button className="px-4 py-2 text-sm bg-glean-blue text-white rounded-md hover:bg-glean-blue-hover transition-colors">
             + Add Case
           </button>
         </div>
@@ -114,14 +114,14 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
       </div>
 
       {/* Recent Runs */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="bg-white rounded-lg border border-border p-6">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-semibold text-gray-900">Recent Runs</h2>
+          <h2 className="text-xl font-semibold text-[#1A1A1A]">Recent Runs</h2>
           <RunEvalButton evalSetId={params.id} hasCases={evalSet.cases.length > 0} />
         </div>
 
         {evalSet.recentRuns.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
+          <div className="text-center py-8 text-cement">
             No evaluation runs yet. Click "Run Evaluation" to start.
           </div>
         ) : (
@@ -130,16 +130,16 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
               <Link
                 key={run.id}
                 href={`/runs/${run.id}`}
-                className="block p-4 border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-sm transition-all"
+                className="block p-4 border border-border rounded-lg hover:border-glean-blue hover:shadow-card-hover transition-all"
               >
                 <div className="flex justify-between items-center">
                   <div>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm text-cement">
                       {run.completedAt
                         ? new Date(run.completedAt).toLocaleString()
                         : 'In progress...'}
                     </p>
-                    <p className="text-xs text-gray-400 mt-1">
+                    <p className="text-xs text-cement-light mt-1">
                       Judge: {run.judgeModel || 'N/A'}
                     </p>
                   </div>

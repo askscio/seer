@@ -73,17 +73,17 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
     <div className="overflow-x-auto">
       <table className="w-full border-collapse">
         <thead>
-          <tr className="bg-gray-50 border-b border-gray-200">
-            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700 w-12">
+          <tr className="bg-surface-page border-b border-border">
+            <th className="text-left px-4 py-3 text-xs font-medium text-cement uppercase tracking-wide w-12">
               #
             </th>
-            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700 w-[40%]">
+            <th className="text-left px-4 py-3 text-xs font-medium text-cement uppercase tracking-wide w-[40%]">
               Input
             </th>
-            <th className="text-left px-4 py-3 text-sm font-semibold text-gray-700 w-[40%]">
+            <th className="text-left px-4 py-3 text-xs font-medium text-cement uppercase tracking-wide w-[40%]">
               Expected Output
             </th>
-            <th className="text-right px-4 py-3 text-sm font-semibold text-gray-700 w-24">
+            <th className="text-right px-4 py-3 text-xs font-medium text-cement uppercase tracking-wide w-24">
               Actions
             </th>
           </tr>
@@ -92,7 +92,7 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
           {cases.map((testCase, index) => (
             <tr
               key={testCase.id}
-              className="border-b border-gray-200 hover:bg-gray-50"
+              className="border-b border-border-subtle hover:bg-surface-page/50"
             >
               <td className="px-4 py-3 text-sm text-gray-500">
                 {index + 1}
@@ -102,7 +102,7 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
                   <textarea
                     value={editQuery}
                     onChange={(e) => setEditQuery(e.target.value)}
-                    className="w-full px-2 py-1 border border-blue-500 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-2 py-1 border border-glean-blue rounded text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
                     rows={3}
                   />
                 ) : (
@@ -114,7 +114,7 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
                   <textarea
                     value={editExpected}
                     onChange={(e) => setEditExpected(e.target.value)}
-                    className="w-full px-2 py-1 border border-blue-500 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-2 py-1 border border-glean-blue rounded text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
                     rows={3}
                     placeholder="Optional expected output..."
                   />
@@ -129,13 +129,13 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
                   <div className="flex gap-2 justify-end">
                     <button
                       onClick={() => handleSave(testCase.id)}
-                      className="text-sm text-green-600 hover:text-green-700 font-medium"
+                      className="text-sm text-score-success hover:text-green-700 font-medium"
                     >
                       Save
                     </button>
                     <button
                       onClick={() => setEditingId(null)}
-                      className="text-sm text-gray-600 hover:text-gray-700"
+                      className="text-sm text-cement hover:text-[#1A1A1A]"
                     >
                       Cancel
                     </button>
@@ -144,13 +144,13 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
                   <div className="flex gap-2 justify-end">
                     <button
                       onClick={() => handleEdit(testCase)}
-                      className="text-sm text-blue-600 hover:text-blue-700"
+                      className="text-sm text-glean-blue hover:text-glean-blue-hover"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => handleDelete(testCase.id)}
-                      className="text-sm text-red-600 hover:text-red-700"
+                      className="text-sm text-score-fail hover:text-red-700"
                     >
                       Delete
                     </button>
