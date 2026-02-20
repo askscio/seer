@@ -13,9 +13,8 @@ import { generateId } from './lib/id'
 import { db, initializeDB } from './db/index'
 import { evalSets, evalCases, evalRuns, evalResults, evalScores, evalCriteria } from './db/schema'
 import { runAgent } from './data/glean'
-import { judgeResponse, judgeResponseBatch } from './lib/judge'
+import { judgeResponseBatch, JUDGE_MODELS } from './lib/judge'
 import { DEFAULT_CRITERIA, getCriterion } from './criteria/defaults'
-import { generateEvalSet } from './lib/generate'
 import { smartGenerate } from './lib/generate-agent'
 import { fetchAgentInfo } from './lib/fetch-agent'
 import { config } from './lib/config'
@@ -137,7 +136,7 @@ setCmd
         if (!schemaResp.ok) {
           throw new Error(`Failed to fetch agent schema: ${schemaResp.status}`)
         }
-        const schema = await schemaResp.json()
+        const schema = await schemaResp.json() as { input_schema?: Record<string, any> }
 
         const generated = await smartGenerate({
           agentId: opts.agentId,
@@ -389,6 +388,13 @@ program
         return c
       })
 
+      const judgeModelIds = opts.multiJudge
+        ? JUDGE_MODELS.map(m => m.id)
+        : [JUDGE_MODELS[0].id]
+      const judgeDisplay = judgeModelIds.length > 1
+        ? `Ensemble (${judgeModelIds.map(id => JUDGE_MODELS.find(m => m.id === id)?.name).join(', ')})`
+        : JUDGE_MODELS.find(m => m.id === judgeModelIds[0])?.displayName || judgeModelIds[0]
+
       const mode = opts.deep
         ? (opts.multiJudge ? 'Deep + Multi-Judge' : 'Deep (with factuality)')
         : (opts.multiJudge ? 'Multi-Judge' : 'Quick')
@@ -398,7 +404,7 @@ program
       console.log(`   Cases: ${cases.length}`)
       console.log(`   Criteria: ${criteriaIds.join(', ')}`)
       console.log(`   Mode: ${mode}`)
-      console.log(`   Judge: Opus 4.6\n`)
+      console.log(`   Judge: ${judgeDisplay}\n`)
 
       // Create run
       const runId = generateId()
@@ -409,7 +415,9 @@ program
         status: 'running',
         config: JSON.stringify({
           criteria: criteriaIds,
-          judgeModel: opts.multiJudge ? 'ensemble' : 'opus-4-6',
+          judgeModel: judgeModelIds.length > 1 ? 'ensemble' : JUDGE_MODELS.find(m => m.id === judgeModelIds[0])?.name || 'opus-4-6',
+          judges: judgeModelIds,
+          mode,
           multiJudge: opts.multiJudge,
         })
       })
@@ -436,7 +444,7 @@ program
             agentResult.response,
             agentResult,
             testCase.evalGuidance || undefined,
-            opts.multiJudge,
+            judgeModelIds,
           )
 
           // 3. Calculate overall score (weighted average, converting categories to numeric)
@@ -698,7 +706,7 @@ program
         throw new Error(`Failed to fetch agent schema: ${schemaResp.status} ${schemaResp.statusText}`)
       }
 
-      const schema = await schemaResp.json()
+      const schema = await schemaResp.json() as { input_schema?: Record<string, any> }
 
       // Fetch agent name
       console.log('Fetching agent details...')
@@ -717,7 +725,7 @@ program
       if (hasFormInputs) {
         console.log(`Fields: ${inputFields.join(', ')}`)
         console.log('\nField Details:')
-        for (const [field, config] of Object.entries(schema.input_schema)) {
+        for (const [field, config] of Object.entries(schema.input_schema || {})) {
           const fieldConfig = config as any
           console.log(`  • ${field}: ${fieldConfig.type || 'unknown'}`)
           if (fieldConfig.description) {

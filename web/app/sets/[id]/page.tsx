@@ -6,6 +6,7 @@ import EvalConfigSection from '@/components/EvalConfigSection'
 import ResetRunsButton from '@/components/ResetRunsButton'
 import CaseTable from '@/components/CaseTable'
 import { InfoIcon } from '@/components/Tooltip'
+import { DIMENSIONS } from '@/lib/dimensions'
 
 export const dynamic = 'force-dynamic'
 
@@ -146,17 +147,11 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
               {latestRun.criteria.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {latestRun.criteria.map((c: string) => {
-                    const tooltips: Record<string, string> = {
-                      topical_coverage: 'Reference-based: decomposes eval guidance into themes (COVERED/TOUCHED/MISSING) and scores coverage ratio. Eval guidance describes themes to cover, not exact text to match.',
-                      response_quality: 'Reference-based: evaluates structure, conciseness, and actionability independent of factual content.',
-                      groundedness: 'Reference-free: checks if claims are supported by docs the agent actually retrieved. No expected answer needed — immune to data staleness.',
-                      hallucination_risk: 'Reference-free: flags specific claims (names, numbers, dates) that lack source backing in the agent\'s reasoning chain.',
-                      factual_accuracy: 'Search-verified: judge independently searches company data to verify claims. Most expensive but catches factual errors other calls miss (Siro et al., GER-Eval).',
-                    }
+                    const dim = DIMENSIONS[c]
                     return (
                       <span key={c} className="text-xs px-2 py-1 rounded-full bg-surface-page border border-border-subtle text-cement inline-flex items-center gap-0.5">
-                        {c.replace(/_/g, ' ')}
-                        {tooltips[c] && <InfoIcon text={tooltips[c]} wide />}
+                        {dim?.name || c.replace(/_/g, ' ')}
+                        {dim && <InfoIcon text={dim.tooltip} wide />}
                       </span>
                     )
                   })}

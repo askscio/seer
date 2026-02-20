@@ -117,17 +117,6 @@ export default function ResultsTable({ results }: ResultsTableProps) {
       )
     }
 
-    // Continuous (0-10) - show score with color coding
-    if (scoreValue !== null) {
-      const colorClass =
-        scoreValue >= 7
-          ? 'text-score-success'
-          : scoreValue >= 4
-          ? 'text-score-warning'
-          : 'text-score-fail'
-      return <span className={`font-bold ${colorClass}`}>{scoreValue.toFixed(1)}</span>
-    }
-
     return <span className="text-cement-light">-</span>
   }
 

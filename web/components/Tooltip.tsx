@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 
 export function Tooltip({ text, children, wide }: { text: string; children: React.ReactNode; wide?: boolean }) {
   return (
@@ -16,36 +17,40 @@ export function InfoIcon({ text, wide }: { text: string; wide?: boolean }) {
 }
 
 /**
- * Tooltip that auto-detects whether to show above or below based on viewport position.
- * Falls below when there isn't enough room above.
+ * Tooltip that renders via portal to escape overflow containers.
+ * Uses position: fixed so it's never clipped by parent overflow.
  */
 function SmartTooltip({ text, wide }: { text: string; wide?: boolean }) {
   const [visible, setVisible] = useState(false)
-  const [position, setPosition] = useState<'above' | 'below'>('above')
+  const [coords, setCoords] = useState({ top: 0, left: 0, position: 'above' as 'above' | 'below' })
   const triggerRef = useRef<HTMLSpanElement>(null)
 
-  useEffect(() => {
-    if (visible && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect()
-      // If there's less than 120px above the trigger, show below
-      setPosition(rect.top < 120 ? 'below' : 'above')
-    }
-  }, [visible])
+  const show = useCallback(() => {
+    if (!triggerRef.current) return
+    const rect = triggerRef.current.getBoundingClientRect()
+    const tooltipWidth = wide ? 320 : 256
+    const showBelow = rect.top < 120
 
-  const tooltipClasses = position === 'above'
-    ? 'bottom-full left-1/2 -translate-x-1/2 mb-2'
-    : 'top-full left-1/2 -translate-x-1/2 mt-2'
+    // Center tooltip horizontally on trigger, clamp to viewport
+    let left = rect.left + rect.width / 2 - tooltipWidth / 2
+    left = Math.max(8, Math.min(left, window.innerWidth - tooltipWidth - 8))
 
-  const arrowClasses = position === 'above'
-    ? 'absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-[#1A1A1A]'
-    : 'absolute bottom-full left-1/2 -translate-x-1/2 -mb-px border-4 border-transparent border-b-[#1A1A1A]'
+    setCoords({
+      top: showBelow ? rect.bottom + 8 : rect.top - 8,
+      left,
+      position: showBelow ? 'below' : 'above',
+    })
+    setVisible(true)
+  }, [wide])
+
+  const hide = useCallback(() => setVisible(false), [])
 
   return (
     <span
       ref={triggerRef}
       className="relative inline-flex items-center ml-1 cursor-help"
-      onMouseEnter={() => setVisible(true)}
-      onMouseLeave={() => setVisible(false)}
+      onMouseEnter={show}
+      onMouseLeave={hide}
     >
       <svg
         width="14"
@@ -58,13 +63,18 @@ function SmartTooltip({ text, wide }: { text: string; wide?: boolean }) {
         <path d="M8 7v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         <circle cx="8" cy="5" r="0.75" fill="currentColor" />
       </svg>
-      {visible && (
-        <span
-          className={`absolute ${tooltipClasses} ${wide ? 'w-80' : 'w-64'} bg-[#1A1A1A] text-white text-xs leading-relaxed rounded-md px-3 py-2 z-50 shadow-lg`}
+      {visible && typeof document !== 'undefined' && createPortal(
+        <div
+          className={`fixed ${wide ? 'w-80' : 'w-64'} bg-[#1A1A1A] text-white text-xs leading-relaxed rounded-md px-3 py-2 z-[9999] shadow-lg pointer-events-none`}
+          style={{
+            top: coords.position === 'above' ? undefined : coords.top,
+            bottom: coords.position === 'above' ? `${window.innerHeight - coords.top}px` : undefined,
+            left: coords.left,
+          }}
         >
           {text}
-          <span className={arrowClasses} />
-        </span>
+        </div>,
+        document.body,
       )}
     </span>
   )

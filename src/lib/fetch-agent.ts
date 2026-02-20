@@ -25,7 +25,7 @@ export async function fetchAgentInfo(agentId: string): Promise<AgentInfo | null>
       return null
     }
 
-    const agent = await response.json()
+    const agent = await response.json() as AgentInfo
     return agent
   } catch (error) {
     console.error('Error fetching agent info:', error)

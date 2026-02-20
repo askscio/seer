@@ -38,7 +38,7 @@ export interface AgentResult {
 // Judge score for single criterion
 export interface JudgeScore {
   criterionId: string
-  scoreValue?: number  // For continuous/binary (0-10 or 0-1)
+  scoreValue?: number  // For binary (0 or 1) or numeric metrics
   scoreCategory?: string  // For categorical
   reasoning: string
   judgeModel: string

@@ -2,7 +2,7 @@
  * LLM-as-judge with three-call architecture and multi-judge ensemble
  *
  * Call 1 (Coverage):     Reference-based — categorical scoring against eval guidance themes
- * Call 2 (Faithfulness): Source-grounded — reads agent's source docs via search, verifies claims
+ * Call 2 (Faithfulness): Source-grounded — reads agent's retrieved documents via search, verifies claims
  * Call 3 (Factuality):   Search-verified — ADVANCED agent independently verifies + cites sources
  *
  * Multi-judge: runs each call through multiple models, aggregates via majority vote.
@@ -16,13 +16,27 @@ import type { JudgeScore, AgentResult } from '../types'
 import { extractMetric } from './metrics'
 
 // Available judge models (cross-family panel)
-const JUDGE_MODELS: { id: string; name: string }[] = [
-  { id: 'OPUS_4_6_VERTEX', name: 'opus-4-6' },
-  { id: 'GPT_5', name: 'gpt-5' },
+// Single source of truth — UI imports this via web/lib/dimensions.ts
+export const JUDGE_MODELS: { id: string; name: string; displayName: string; provider: string }[] = [
+  { id: 'OPUS_4_6_VERTEX', name: 'opus-4-6', displayName: 'Claude Opus 4.6', provider: 'Anthropic' },
+  { id: 'GPT_5', name: 'gpt-5', displayName: 'GPT-5', provider: 'OpenAI' },
+  { id: 'ADVANCED', name: 'gemini-advanced', displayName: 'Gemini (Advanced)', provider: 'Google' },
 ]
 
+const DEFAULT_MODEL = JUDGE_MODELS[0]
+
+/** Resolve model IDs to model objects, falling back to default */
+function resolveModels(modelIds?: string[]): typeof JUDGE_MODELS {
+  if (!modelIds || modelIds.length === 0) return [DEFAULT_MODEL]
+  const resolved = modelIds
+    .map(id => JUDGE_MODELS.find(m => m.id === id))
+    .filter((m): m is typeof JUDGE_MODELS[number] => m !== undefined)
+  return resolved.length > 0 ? resolved : [DEFAULT_MODEL]
+}
+
 /**
- * Batch judge with optional multi-judge ensemble
+ * Batch judge with optional multi-judge ensemble.
+ * Pass modelIds to control which models score. 1 model = single judge, 2+ = ensemble.
  */
 export async function judgeResponseBatch(
   criteria: CriterionDefinition[],
@@ -30,17 +44,19 @@ export async function judgeResponseBatch(
   response: string,
   agentResult: AgentResult,
   evalGuidance?: string,
-  multiJudge: boolean = false,
+  modelIds?: string[],
 ): Promise<JudgeScore[]> {
-  if (!multiJudge) {
+  const models = resolveModels(modelIds)
+
+  if (models.length === 1) {
     // Single judge (default — faster)
-    return runJudgePipeline(criteria, query, response, agentResult, evalGuidance, JUDGE_MODELS[0])
+    return runJudgePipeline(criteria, query, response, agentResult, evalGuidance, models[0])
   }
 
-  // Multi-judge: run through all models, aggregate
-  console.log(`  → Multi-judge: ${JUDGE_MODELS.map(m => m.name).join(', ')}`)
+  // Multi-judge: run through selected models, aggregate
+  console.log(`  → Multi-judge: ${models.map(m => m.name).join(', ')}`)
   const allResults = await Promise.all(
-    JUDGE_MODELS.map(model =>
+    models.map(model =>
       runJudgePipeline(criteria, query, response, agentResult, evalGuidance, model)
         .catch(err => {
           console.warn(`  ⚠ ${model.name} failed: ${err.message}`)
@@ -60,7 +76,7 @@ export async function judgeResponseBatch(
     return successfulResults[0]
   }
 
-  // Aggregate: for each criterion, take median score across judges
+  // Aggregate: majority vote per criterion
   return aggregateScores(criteria, successfulResults)
 }
 
@@ -71,8 +87,9 @@ export async function judgeResponse(
   response: string,
   agentResult: AgentResult,
   evalGuidance?: string,
+  modelIds?: string[],
 ): Promise<JudgeScore> {
-  const scores = await judgeResponseBatch([criterion], query, response, agentResult, evalGuidance)
+  const scores = await judgeResponseBatch([criterion], query, response, agentResult, evalGuidance, modelIds)
   return scores[0]
 }
 
@@ -168,7 +185,7 @@ ${scoreFormat}`
   return criteria.map(c => parseScore(text, c, model.name))
 }
 
-// ===== Call 2: Faithfulness (source-grounded, tool-assisted) =====
+// ===== Call 2: Faithfulness (source-grounded) =====
 
 async function judgeFaithfulnessBatch(
   criteria: CriterionDefinition[],

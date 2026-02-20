@@ -2,8 +2,8 @@
  * Evaluation dimensions for enterprise knowledge agents
  *
  * Organized by evaluation method:
- * - Coverage (reference-based): compared against expected answer
- * - Faithfulness (reference-free): checked against agent's own retrieval
+ * - Coverage (reference-based): compared against eval guidance themes
+ * - Faithfulness (source-grounded): checked against agent's retrieved documents
  * - Factuality (search-verified): verified via live company search
  * - Metrics (direct): measured from execution data
  *
@@ -78,7 +78,7 @@ Evaluate information density, not length. A concise correct answer is BETTER tha
     weight: 0.7,
   },
 
-  // ===== FAITHFULNESS (reference-free — Call 2) =====
+  // ===== FAITHFULNESS (source-grounded — Call 2) =====
 
   {
     id: 'groundedness',
@@ -155,7 +155,7 @@ Then assign a category:
     scoreType: 'metric',
     judgeCall: 'metric',
     scaleConfig: { metricExtractor: 'latencyMs' },
-    weight: 0.3,
+    weight: 0,  // Metrics are excluded from overall score — displayed separately
   },
 
   {
@@ -166,7 +166,7 @@ Then assign a category:
     scoreType: 'metric',
     judgeCall: 'metric',
     scaleConfig: { metricExtractor: 'toolCallCount' },
-    weight: 0.1,
+    weight: 0,  // Metrics are excluded from overall score — displayed separately
   },
 ]
 

@@ -59,6 +59,7 @@ const ALL_CRITERIA = Object.entries(DIMENSIONS).map(([id, dim]) => ({
   tooltip: dim.tooltip,
 }))
 
+// Matches JUDGE_MODELS in src/lib/judge.ts (single source of truth)
 const JUDGE_MODELS = [
   { id: 'OPUS_4_6_VERTEX', name: 'Claude Opus 4.6', provider: 'Anthropic' },
   { id: 'GPT_5', name: 'GPT-5', provider: 'OpenAI' },

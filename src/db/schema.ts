@@ -74,7 +74,7 @@ export const evalScores = sqliteTable('eval_scores', {
   criterionId: text('criterion_id').notNull().references(() => evalCriteria.id),
 
   // Score data (flexible for all types)
-  scoreValue: real('score_value'), // For continuous/binary
+  scoreValue: real('score_value'), // For binary (0/1) or numeric metrics
   scoreCategory: text('score_category'), // For categorical
   reasoning: text('reasoning').notNull(),
   judgeModel: text('judge_model'),

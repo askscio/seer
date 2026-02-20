@@ -4,7 +4,7 @@ import { eq, inArray } from 'drizzle-orm'
 
 // Import from CLI code
 import { runAgent } from '../../../../src/data/glean'
-import { judgeResponseBatch } from '../../../../src/lib/judge'
+import { judgeResponseBatch, JUDGE_MODELS } from '../../../../src/lib/judge'
 import { getCriterion } from '../../../../src/criteria/defaults'
 import { generateId } from '../../../../src/lib/id'
 
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     const {
       evalSetId,
       criteria = ['topical_coverage', 'response_quality', 'groundedness', 'hallucination_risk'],
-      judges = ['opus-4-6'],
+      judges = ['OPUS_4_6_VERTEX'],
       mode = 'quick',
     } = body
 
@@ -53,7 +53,9 @@ export async function POST(request: Request) {
       completedAt: null,
       config: JSON.stringify({
         criteria,
-        judgeModel: judges.length > 1 ? 'ensemble' : judges[0] || 'opus-4-6',
+        judgeModel: judges.length > 1
+          ? 'ensemble'
+          : JUDGE_MODELS.find(m => m.id === judges[0])?.displayName || judges[0],
         judges,
         mode,
         multiJudge: judges.length > 1,
@@ -61,7 +63,7 @@ export async function POST(request: Request) {
     })
 
     // Process cases (async - don't block response)
-    processCases(runId, set.agentId, cases, criteriaObjs, judges.length > 1).catch(console.error)
+    processCases(runId, set.agentId, cases, criteriaObjs, judges).catch(console.error)
 
     return NextResponse.json({ runId, status: 'started' })
   } catch (error) {
@@ -116,7 +118,7 @@ async function processCases(
   agentId: string,
   cases: any[],
   criteria: any[],
-  multiJudge: boolean,
+  judgeModelIds: string[],
 ) {
   const results: any[] = []
 
@@ -134,7 +136,7 @@ async function processCases(
         agentResult.response,
         agentResult,
         testCase.evalGuidance || undefined,
-        multiJudge,
+        judgeModelIds,
       )
 
       // 3. Calculate overall score (weighted average, converting categories to numeric)
