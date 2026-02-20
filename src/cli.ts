@@ -2,10 +2,13 @@
 
 /**
  * Seer CLI - Agent evaluation framework
+ *
+ * Full parity with Web UI — every operation is non-interactive
+ * when --yes flag is used, enabling agentic orchestration.
  */
 
 import { program } from 'commander'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { generateId } from './lib/id'
 import { db, initializeDB } from './db/index'
 import { evalSets, evalCases, evalRuns, evalResults, evalScores, evalCriteria } from './db/schema'
@@ -16,6 +19,7 @@ import { generateEvalSet } from './lib/generate'
 import { smartGenerate } from './lib/generate-agent'
 import { fetchAgentInfo } from './lib/fetch-agent'
 import { config } from './lib/config'
+import { readFileSync } from 'fs'
 import type { JudgeScore } from './types'
 import type { CriterionDefinition } from './criteria/defaults'
 import * as readline from 'readline'
@@ -28,6 +32,48 @@ program
   .description('Agent evaluation framework with LLM-as-judge')
   .version('0.1.0')
 
+// ===== Agent Commands =====
+
+program
+  .command('agent-info <agent-id>')
+  .description('Fetch and display agent details from Glean')
+  .action(async (agentId) => {
+    try {
+      const agentInfo = await fetchAgentInfo(agentId)
+      if (!agentInfo) {
+        console.error(`Agent ${agentId} not found`)
+        process.exit(1)
+      }
+
+      console.log(`\n=== Agent Info ===`)
+      console.log(`ID:          ${agentInfo.agent_id}`)
+      console.log(`Name:        ${agentInfo.name}`)
+      console.log(`Description: ${agentInfo.description || '(none)'}`)
+
+      // Also fetch schema
+      const schemaResp = await fetch(
+        `${config.gleanBackend}/rest/api/v1/agents/${agentId}/schemas`,
+        { headers: { 'Authorization': `Bearer ${config.gleanApiKey}` } }
+      )
+
+      if (schemaResp.ok) {
+        const schema = await schemaResp.json() as any
+        const inputFields = Object.keys(schema.input_schema || {})
+        console.log(`Type:        ${inputFields.length > 0 ? 'Form-based' : 'Chat-style'}`)
+        if (inputFields.length > 0) {
+          console.log(`Fields:`)
+          for (const [field, cfg] of Object.entries(schema.input_schema)) {
+            const fc = cfg as any
+            console.log(`  • ${field}: ${fc.type || 'unknown'}${fc.description ? ` (${fc.description})` : ''}`)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching agent info:', error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+  })
+
 // ===== Eval Set Commands =====
 
 const setCmd = program
@@ -36,29 +82,92 @@ const setCmd = program
 
 setCmd
   .command('create')
-  .description('Create a new evaluation set')
-  .requiredOption('--name <name>', 'Eval set name')
+  .description('Create a new evaluation set (optionally with cases)')
   .requiredOption('--agent-id <id>', 'Glean agent ID')
+  .option('--name <name>', 'Eval set name (auto-fetched from agent if omitted)')
   .option('--description <desc>', 'Description of the eval set')
+  .option('--generate <count>', 'Auto-generate N test cases using AI')
+  .option('--csv <file>', 'Import test cases from CSV file')
   .action(async (opts) => {
     try {
-      const setId = generateId()
-      const now = new Date()
+      // If no name provided, fetch from agent
+      let setName = opts.name
+      let setDescription = opts.description
+      if (!setName) {
+        const agentInfo = await fetchAgentInfo(opts.agentId)
+        if (agentInfo?.name) {
+          setName = agentInfo.name
+          if (!setDescription) setDescription = `Evaluation of ${agentInfo.name}`
+          console.log(`Agent: ${agentInfo.name}`)
+        } else {
+          setName = `Agent ${opts.agentId.slice(0, 8)} Evaluation`
+        }
+      }
 
-      // Insert eval set
+      const setId = generateId()
       await db.insert(evalSets).values({
         id: setId,
-        name: opts.name,
-        description: opts.description || '',
+        name: setName,
+        description: setDescription || '',
         agentId: opts.agentId,
-        createdAt: now
+        createdAt: new Date()
       })
 
-      console.log(`✓ Created eval set: ${opts.name}`)
+      console.log(`✓ Created eval set: ${setName}`)
       console.log(`  ID: ${setId}`)
       console.log(`  Agent: ${opts.agentId}`)
-      console.log(`\nNext step: Add test cases with:`)
-      console.log(`  seer set add-case ${setId} --query "Your test query"`)
+
+      let caseCount = 0
+
+      // Import CSV if provided
+      if (opts.csv) {
+        caseCount += await importCSVToSet(setId, opts.csv)
+      }
+
+      // Generate cases if requested
+      if (opts.generate) {
+        const count = parseInt(opts.generate)
+        console.log(`\nGenerating ${count} test cases...`)
+
+        const agentInfo = await fetchAgentInfo(opts.agentId)
+        const schemaResp = await fetch(
+          `${config.gleanBackend}/rest/api/v1/agents/${opts.agentId}/schemas`,
+          { headers: { 'Authorization': `Bearer ${config.gleanApiKey}` } }
+        )
+        if (!schemaResp.ok) {
+          throw new Error(`Failed to fetch agent schema: ${schemaResp.status}`)
+        }
+        const schema = await schemaResp.json()
+
+        const generated = await smartGenerate({
+          agentId: opts.agentId,
+          agentName: agentInfo?.name || setName,
+          agentDescription: agentInfo?.description || '',
+          schema,
+          count,
+        })
+
+        for (const testCase of generated.cases) {
+          const hasMultiFields = Object.keys(testCase.input).length > 1
+          await db.insert(evalCases).values({
+            id: generateId(),
+            evalSetId: setId,
+            query: testCase.query,
+            evalGuidance: testCase.evalGuidance || null,
+            metadata: hasMultiFields ? JSON.stringify({ fields: testCase.input }) : null,
+            createdAt: new Date()
+          })
+        }
+        caseCount += generated.cases.length
+        console.log(`  ✓ Generated ${generated.cases.length} cases`)
+      }
+
+      if (caseCount > 0) {
+        console.log(`\nTotal cases: ${caseCount}`)
+      }
+
+      console.log(`\nRun evaluation with:`)
+      console.log(`  seer run ${setId}`)
     } catch (error) {
       console.error('Error creating eval set:', error instanceof Error ? error.message : String(error))
       process.exit(1)
@@ -69,23 +178,24 @@ setCmd
   .command('add-case <set-id>')
   .description('Add a test case to an existing eval set')
   .requiredOption('--query <query>', 'Test query')
-  .option('--expected <answer>', 'Expected answer (optional)')
+  .option('--expected <answer>', 'Eval guidance (optional)')
+  .option('--guidance <guidance>', 'Eval guidance (optional, alias for --expected)')
   .option('--context <context>', 'Additional context for judge')
   .action(async (setId, opts) => {
     try {
-      // Verify set exists
       const set = await db.select().from(evalSets).where(eq(evalSets.id, setId))
       if (set.length === 0) {
         throw new Error(`Eval set ${setId} not found`)
       }
 
       const caseId = generateId()
+      const guidance = opts.guidance || opts.expected
       await db.insert(evalCases).values({
         id: caseId,
         evalSetId: setId,
         query: opts.query,
-        expectedAnswer: opts.expected,
-        context: opts.context,
+        evalGuidance: guidance || null,
+        context: opts.context || null,
         createdAt: new Date()
       })
 
@@ -94,6 +204,124 @@ setCmd
       console.log(`  Query: ${opts.query}`)
     } catch (error) {
       console.error('Error adding test case:', error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+  })
+
+setCmd
+  .command('edit-case <case-id>')
+  .description('Edit an existing test case')
+  .option('--query <query>', 'New query text')
+  .option('--guidance <guidance>', 'New eval guidance')
+  .option('--context <context>', 'New context')
+  .action(async (caseId, opts) => {
+    try {
+      const existing = await db.select().from(evalCases).where(eq(evalCases.id, caseId))
+      if (existing.length === 0) {
+        throw new Error(`Case ${caseId} not found`)
+      }
+
+      const updates: any = {}
+      if (opts.query !== undefined) updates.query = opts.query
+      if (opts.guidance !== undefined) updates.evalGuidance = opts.guidance
+      if (opts.context !== undefined) updates.context = opts.context
+
+      if (Object.keys(updates).length === 0) {
+        console.log('No updates specified. Use --query, --guidance, or --context.')
+        process.exit(1)
+      }
+
+      await db.update(evalCases).set(updates).where(eq(evalCases.id, caseId))
+
+      console.log(`✓ Updated case ${caseId}`)
+      if (opts.query) console.log(`  Query: ${opts.query}`)
+      if (opts.guidance) console.log(`  Guidance: ${opts.guidance}`)
+      if (opts.context) console.log(`  Context: ${opts.context}`)
+    } catch (error) {
+      console.error('Error editing case:', error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+  })
+
+setCmd
+  .command('remove-case <case-id>')
+  .description('Delete a test case')
+  .action(async (caseId) => {
+    try {
+      const existing = await db.select().from(evalCases).where(eq(evalCases.id, caseId))
+      if (existing.length === 0) {
+        throw new Error(`Case ${caseId} not found`)
+      }
+
+      await db.delete(evalCases).where(eq(evalCases.id, caseId))
+      console.log(`✓ Deleted case ${caseId}`)
+    } catch (error) {
+      console.error('Error removing case:', error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+  })
+
+setCmd
+  .command('import-csv <set-id> <file>')
+  .description('Import test cases from a CSV file (columns: query,eval_guidance)')
+  .action(async (setId, file) => {
+    try {
+      const set = await db.select().from(evalSets).where(eq(evalSets.id, setId))
+      if (set.length === 0) {
+        throw new Error(`Eval set ${setId} not found`)
+      }
+
+      const count = await importCSVToSet(setId, file)
+      console.log(`\n✓ Imported ${count} cases to ${set[0].name}`)
+    } catch (error) {
+      console.error('Error importing CSV:', error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+  })
+
+setCmd
+  .command('delete <set-id>')
+  .description('Delete an eval set and all its cases, runs, and results')
+  .option('--yes', 'Skip confirmation')
+  .action(async (setId, opts) => {
+    try {
+      const set = await db.select().from(evalSets).where(eq(evalSets.id, setId))
+      if (set.length === 0) {
+        throw new Error(`Eval set ${setId} not found`)
+      }
+
+      if (!opts.yes) {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+        const answer = await new Promise<string>(resolve => {
+          rl.question(`Delete "${set[0].name}" and all associated data? (y/n): `, resolve)
+        })
+        rl.close()
+        if (answer.toLowerCase() !== 'y') {
+          console.log('Cancelled')
+          process.exit(0)
+        }
+      }
+
+      // Cascade delete: scores → results → runs → cases → set
+      const runs = await db.select({ id: evalRuns.id }).from(evalRuns).where(eq(evalRuns.evalSetId, setId))
+      const runIds = runs.map(r => r.id)
+
+      if (runIds.length > 0) {
+        const results = await db.select({ id: evalResults.id }).from(evalResults).where(inArray(evalResults.runId, runIds))
+        const resultIds = results.map(r => r.id)
+        if (resultIds.length > 0) {
+          await db.delete(evalScores).where(inArray(evalScores.resultId, resultIds))
+          await db.delete(evalResults).where(inArray(evalResults.runId, runIds))
+        }
+        await db.delete(evalRuns).where(eq(evalRuns.evalSetId, setId))
+      }
+
+      await db.delete(evalCases).where(eq(evalCases.evalSetId, setId))
+      await db.delete(evalSets).where(eq(evalSets.id, setId))
+
+      console.log(`✓ Deleted eval set "${set[0].name}" (${runIds.length} runs, all cases and scores)`)
+    } catch (error) {
+      console.error('Error deleting eval set:', error instanceof Error ? error.message : String(error))
       process.exit(1)
     }
   })
@@ -118,9 +346,9 @@ setCmd
       console.log(`\nTest Cases (${cases.length}):`)
 
       cases.forEach((c, i) => {
-        console.log(`\n${i + 1}. ${c.query}`)
-        if (c.expectedAnswer) {
-          console.log(`   Expected: ${c.expectedAnswer}`)
+        console.log(`\n${i + 1}. [${c.id}] ${c.query}`)
+        if (c.evalGuidance) {
+          console.log(`   Guidance: ${c.evalGuidance}`)
         }
       })
     } catch (error) {
@@ -181,7 +409,8 @@ program
         status: 'running',
         config: JSON.stringify({
           criteria: criteriaIds,
-          judgeModel: opts.judgeModel
+          judgeModel: opts.multiJudge ? 'ensemble' : 'opus-4-6',
+          multiJudge: opts.multiJudge,
         })
       })
 
@@ -195,8 +424,10 @@ program
         process.stdout.write(`[${caseNum}/${cases.length}] Evaluating case ${testCase.id.slice(0, 8)}... `)
 
         try {
-          // 1. Run agent
-          const agentResult = await runAgent(set.agentId, testCase.query, testCase.id)
+          // 1. Run agent (use structured fields from metadata if available)
+          const caseMetadata = testCase.metadata ? JSON.parse(testCase.metadata) : null
+          const structuredFields = caseMetadata?.fields as Record<string, string> | undefined
+          const agentResult = await runAgent(set.agentId, testCase.query, testCase.id, structuredFields)
 
           // 2. Judge (batch by call type — coverage, faithfulness, factuality)
           const scores = await judgeResponseBatch(
@@ -204,7 +435,7 @@ program
             testCase.query,
             agentResult.response,
             agentResult,
-            testCase.expectedAnswer || undefined,
+            testCase.evalGuidance || undefined,
             opts.multiJudge,
           )
 
@@ -240,6 +471,7 @@ program
             runId,
             caseId: testCase.id,
             agentResponse: agentResult.response,
+            agentTrace: agentResult.reasoningChain ? JSON.stringify(agentResult.reasoningChain) : null,
             latencyMs: agentResult.latencyMs,
             totalTokens: null,  // Not available via REST API (see TRACE_API_LIMITATIONS.md)
             toolCalls: JSON.stringify(agentResult.toolCalls || []),
@@ -285,7 +517,7 @@ program
           .flatMap(r => r.scores)
           .filter(s => s.criterionId === criterion.id)
 
-        if (criterion.scoreType === 'continuous' || criterion.scoreType === 'binary') {
+        if (criterion.scoreType === 'binary') {
           const avg = criterionScores.reduce((sum, s) => sum + (s.scoreValue || 0), 0) / criterionScores.length
           console.log(`  ${criterion.name}: ${avg.toFixed(1)}/10`)
         } else if (criterion.scoreType === 'categorical') {
@@ -446,6 +678,7 @@ program
   .option('--count <n>', 'Number of test cases to generate', '10')
   .option('--name <name>', 'Override generated name')
   .option('--description <desc>', 'Override generated description')
+  .option('--yes', 'Skip confirmation and save immediately')
   .action(async (agentId, opts) => {
     try {
       console.log(`Generating eval set for agent ${agentId}...`)
@@ -510,56 +743,45 @@ program
 
       generated.cases.forEach((c, i) => {
         console.log(`${i + 1}. ${c.query}`)
-        if (c.expectedAnswer) {
-          console.log(`   Expected: ${c.expectedAnswer}`)
+        if (c.evalGuidance) {
+          console.log(`   Guidance: ${c.evalGuidance}`)
         }
         console.log()
       })
 
-      // Ask for approval
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-      })
+      // Save (skip confirmation with --yes)
+      const shouldSave = opts.yes ? true : await askConfirmation('Save this eval set? (y/n): ')
 
-      rl.question('Save this eval set? (y/n): ', async (answer: string) => {
-        if (answer.toLowerCase() === 'y') {
-          try {
-            // Save to database
-            const setId = generateId()
-            await db.insert(evalSets).values({
-              id: setId,
-              name: opts.name || generated.name,
-              description: opts.description || generated.description,
-              agentId,
-              createdAt: new Date()
-            })
+      if (shouldSave) {
+        const setId = generateId()
+        await db.insert(evalSets).values({
+          id: setId,
+          name: opts.name || generated.name,
+          description: opts.description || generated.description,
+          agentId,
+          createdAt: new Date()
+        })
 
-            // Save cases
-            for (const testCase of generated.cases) {
-              const caseId = generateId()
-              await db.insert(evalCases).values({
-                id: caseId,
-                evalSetId: setId,
-                query: testCase.query,
-                expectedAnswer: testCase.expectedAnswer || null,
-                context: testCase.context || null,
-                createdAt: new Date()
-              })
-            }
-
-            console.log(`\n✓ Saved eval set: ${setId}`)
-            console.log(`\nRun evaluation with:`)
-            console.log(`  seer run ${setId} --criteria task_success,factuality,relevance`)
-          } catch (error) {
-            console.error('Error saving eval set:', error)
-          }
-        } else {
-          console.log('Cancelled')
+        for (const testCase of generated.cases) {
+          const hasMultiFields = Object.keys(testCase.input).length > 1
+          await db.insert(evalCases).values({
+            id: generateId(),
+            evalSetId: setId,
+            query: testCase.query,
+            evalGuidance: testCase.evalGuidance || null,
+            metadata: hasMultiFields ? JSON.stringify({ fields: testCase.input }) : null,
+            createdAt: new Date()
+          })
         }
-        rl.close()
-        process.exit(0)
-      })
+
+        console.log(`\n✓ Saved eval set: ${setId}`)
+        console.log(`\nRun evaluation with:`)
+        console.log(`  seer run ${setId}`)
+      } else {
+        console.log('Cancelled')
+      }
+
+      process.exit(0)
 
     } catch (error) {
       console.error('Error generating eval set:', error instanceof Error ? error.message : String(error))
@@ -568,3 +790,94 @@ program
   })
 
 program.parse()
+
+// ===== Utilities =====
+
+/**
+ * Parse a CSV file and import cases into an eval set.
+ * Format: query,eval_guidance (header row optional, guidance column optional)
+ */
+async function importCSVToSet(setId: string, filePath: string): Promise<number> {
+  const text = readFileSync(filePath, 'utf-8')
+  const lines = text.split('\n').filter(l => l.trim())
+
+  if (lines.length === 0) {
+    throw new Error('CSV file is empty')
+  }
+
+  // Check for header row
+  const firstLine = lines[0].toLowerCase()
+  const hasHeader = firstLine.includes('query') || firstLine.includes('eval_guidance') || firstLine.includes('guidance')
+  const dataLines = hasHeader ? lines.slice(1) : lines
+
+  let count = 0
+  for (const line of dataLines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    const fields = parseCSVLine(trimmed)
+    if (fields.length > 0 && fields[0]) {
+      await db.insert(evalCases).values({
+        id: generateId(),
+        evalSetId: setId,
+        query: fields[0],
+        evalGuidance: fields[1] || null,
+        createdAt: new Date()
+      })
+      count++
+    }
+  }
+
+  console.log(`  ✓ Imported ${count} cases from ${filePath}`)
+  return count
+}
+
+/**
+ * Parse a single CSV line, handling quoted fields.
+ */
+function parseCSVLine(line: string): string[] {
+  const fields: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"'
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        current += ch
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true
+      } else if (ch === ',') {
+        fields.push(current.trim())
+        current = ''
+      } else {
+        current += ch
+      }
+    }
+  }
+
+  fields.push(current.trim())
+  return fields
+}
+
+/**
+ * Interactive yes/no confirmation (used when --yes is not set)
+ */
+function askConfirmation(prompt: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise(resolve => {
+    rl.question(prompt, (answer: string) => {
+      rl.close()
+      resolve(answer.toLowerCase() === 'y')
+    })
+  })
+}

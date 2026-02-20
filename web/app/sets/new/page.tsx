@@ -1,138 +1,373 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useToast } from '@/components/ToastContainer'
+import { Markdown } from '@/components/Markdown'
 
-interface GeneratedCase {
+interface TestCase {
   query: string
-  expectedAnswer?: string
-  context?: string
+  evalGuidance?: string
+  fields?: Record<string, string>  // Structured inputs for multi-field agents
+  source: 'generate' | 'csv' | 'manual'
 }
+
+type Tab = 'generate' | 'csv' | 'manual'
 
 export default function NewEvalSet() {
   const router = useRouter()
   const { showToast } = useToast()
-  const [loading, setLoading] = useState(false)
-  const [generatingAI, setGeneratingAI] = useState(false)
+
+  // Form state
+  const [agentId, setAgentId] = useState('')
+  const [agentName, setAgentName] = useState('')
+  const [agentDescription, setAgentDescription] = useState('')
+  const [fetchingAgent, setFetchingAgent] = useState(false)
+  const [agentFetched, setAgentFetched] = useState(false)
+  const [agentSchemaData, setAgentSchemaData] = useState<any>(null)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [agentId, setAgentId] = useState('')
-  const [generatedCases, setGeneratedCases] = useState<GeneratedCase[]>([])
-  const [showReview, setShowReview] = useState(false)
 
-  const handleAIGenerate = async (autoCount = 5) => {
+  // Tab state
+  const [activeTab, setActiveTab] = useState<Tab>('generate')
+
+  // Test cases (unified across all tabs)
+  const [cases, setCases] = useState<TestCase[]>([])
+
+  // Generate tab state
+  const [generateCount, setGenerateCount] = useState(5)
+  const [generating, setGenerating] = useState(false)
+  const [generatePhase, setGeneratePhase] = useState('')
+  const [generateProgress, setGenerateProgress] = useState({ current: 0, total: 0 })
+
+  // CSV tab state
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Manual tab state
+  const [manualQuery, setManualQuery] = useState('')
+  const [manualGuidance, setManualGuidance] = useState('')
+
+  // Submit state
+  const [creating, setCreating] = useState(false)
+
+  // Fetch agent info on valid ID
+  const fetchAgent = useCallback(async (id: string) => {
+    if (!id || id.length < 8) return
+
+    setFetchingAgent(true)
+    try {
+      const resp = await fetch(`/api/agents/${id}`)
+      if (resp.ok) {
+        const data = await resp.json()
+        setAgentName(data.name || '')
+        setAgentDescription(data.description || '')
+        setAgentSchemaData(data.schema || null)
+        setAgentFetched(true)
+        if (!name) setName(data.name || '')
+        if (!description) setDescription(data.description ? `Evaluation of ${data.name}` : '')
+      } else {
+        setAgentFetched(false)
+      }
+    } catch {
+      setAgentFetched(false)
+    } finally {
+      setFetchingAgent(false)
+    }
+  }, [name, description])
+
+  const handleAgentIdChange = (value: string) => {
+    setAgentId(value)
+    setAgentFetched(false)
+    setAgentName('')
+    setAgentDescription('')
+    setAgentSchemaData(null)
+
+    // Auto-fetch if agent ID looks valid
+    if (value.length >= 24 && /^[a-f0-9]+$/i.test(value)) {
+      fetchAgent(value)
+    }
+  }
+
+  // Generate cases via AI (SSE streaming)
+  const handleGenerate = async () => {
     if (!agentId) {
-      showToast('Please enter an Agent ID first', 'error')
+      showToast('Enter an Agent ID first', 'error')
       return
     }
 
-    setGeneratingAI(true)
-    showToast('Generating test cases with AI...', 'loading', 0)
+    setGenerating(true)
+    setGeneratePhase('Reading agent schema...')
+    setGenerateProgress({ current: 0, total: generateCount })
 
     try {
-      const response = await fetch('/api/generate', {
+      const resp = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, count: autoCount }),
+        body: JSON.stringify({ agentId, count: generateCount, stream: true }),
       })
 
-      if (!response.ok) {
-        throw new Error('Failed to generate eval set')
+      if (!resp.ok) throw new Error('Failed to generate')
+
+      const reader = resp.body?.getReader()
+      if (!reader) throw new Error('No response stream')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        // Process complete SSE messages
+        const lines = buffer.split('\n\n')
+        buffer = lines.pop() || '' // Keep incomplete message in buffer
+
+        for (const line of lines) {
+          const dataLine = line.trim()
+          if (!dataLine.startsWith('data: ')) continue
+          const data = JSON.parse(dataLine.slice(6))
+
+          switch (data.phase) {
+            case 'schema':
+              setGeneratePhase('Reading agent schema...')
+              break
+            case 'inputs':
+              setGeneratePhase('Finding inputs with Glean...')
+              break
+            case 'guidance':
+              setGeneratePhase(`Generating eval guidance... (${data.current}/${data.total})`)
+              setGenerateProgress({ current: data.current - 1, total: data.total })
+              break
+            case 'case':
+              // Add case to list as it arrives (preserve structured fields for multi-field agents)
+              setCases(prev => [...prev, {
+                query: data.case.query,
+                evalGuidance: data.case.evalGuidance,
+                fields: Object.keys(data.case.input || {}).length > 1 ? data.case.input : undefined,
+                source: 'generate' as const,
+              }])
+              setGenerateProgress({ current: data.current, total: data.total })
+              setGeneratePhase(`Generated ${data.current}/${data.total} cases`)
+              break
+            case 'complete':
+              if (!name && data.name) setName(data.name)
+              if (!description && data.description) setDescription(data.description)
+              break
+            case 'done':
+              setGeneratePhase('')
+              showToast(data.message, 'success')
+              break
+            case 'error':
+              showToast(data.message, 'error')
+              break
+          }
+        }
+      }
+    } catch (error) {
+      showToast('Failed to generate test cases', 'error')
+    } finally {
+      setGenerating(false)
+      setGeneratePhase('')
+    }
+  }
+
+  // Parse CSV file
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const text = event.target?.result as string
+      if (!text) return
+
+      const lines = text.split('\n').filter(l => l.trim())
+      if (lines.length === 0) {
+        showToast('CSV file is empty', 'error')
+        return
       }
 
-      const data = await response.json()
+      // Check if first line is a header
+      const firstLine = lines[0].toLowerCase()
+      const hasHeader = firstLine.includes('query') || firstLine.includes('eval_guidance') || firstLine.includes('guidance')
+      const dataLines = hasHeader ? lines.slice(1) : lines
 
-      // Pre-fill form with generated data
-      if (!name) setName(data.name)
-      if (!description) setDescription(data.description)
-      setGeneratedCases(data.cases)
-      setShowReview(true)
-      showToast(`Generated ${data.cases.length} test cases!`, 'success')
-    } catch (error) {
-      console.error('Error generating eval set:', error)
-      showToast('Failed to generate eval set', 'error')
-    } finally {
-      setGeneratingAI(false)
+      const parsed: TestCase[] = []
+      for (const line of dataLines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+
+        // Parse CSV: handle quoted fields
+        const fields = parseCSVLine(trimmed)
+        if (fields.length > 0 && fields[0]) {
+          parsed.push({
+            query: fields[0],
+            evalGuidance: fields[1] || undefined,
+            source: 'csv',
+          })
+        }
+      }
+
+      if (parsed.length === 0) {
+        showToast('No valid rows found in CSV', 'error')
+        return
+      }
+
+      setCases(prev => [...prev, ...parsed])
+      showToast(`Imported ${parsed.length} cases from CSV`, 'success')
+
+      // Reset file input
+      if (fileInputRef.current) fileInputRef.current.value = ''
     }
+    reader.readAsText(file)
   }
 
-  // Auto-generate when agent ID is entered (debounced)
-  const handleAgentIdChange = async (value: string) => {
-    setAgentId(value)
-
-    // Auto-generate if agent ID looks valid (32 chars, alphanumeric)
-    if (value.length === 32 && /^[a-f0-9]+$/.test(value)) {
-      // Small delay to allow user to finish typing
-      setTimeout(() => {
-        handleAIGenerate(5)
-      }, 500)
+  // Add manual case
+  const handleAddManual = () => {
+    if (!manualQuery.trim()) {
+      showToast('Query is required', 'error')
+      return
     }
+
+    setCases(prev => [...prev, {
+      query: manualQuery.trim(),
+      evalGuidance: manualGuidance.trim() || undefined,
+      source: 'manual',
+    }])
+    setManualQuery('')
+    setManualGuidance('')
+    showToast('Case added', 'success')
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
+  // Remove a case
+  const handleRemoveCase = (index: number) => {
+    setCases(prev => prev.filter((_, i) => i !== index))
+  }
 
+  // Edit a case
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [editQuery, setEditQuery] = useState('')
+  const [editGuidance, setEditGuidance] = useState('')
+
+  const startEdit = (index: number) => {
+    setEditingIndex(index)
+    setEditQuery(cases[index].query)
+    setEditGuidance(cases[index].evalGuidance || '')
+  }
+
+  const saveEdit = () => {
+    if (editingIndex === null) return
+    setCases(prev => prev.map((tc, i) =>
+      i === editingIndex
+        ? { ...tc, query: editQuery, evalGuidance: editGuidance || undefined }
+        : tc
+    ))
+    setEditingIndex(null)
+  }
+
+  const cancelEdit = () => {
+    setEditingIndex(null)
+  }
+
+  // Submit
+  const handleSubmit = async () => {
+    if (!name.trim() || !agentId.trim()) {
+      showToast('Name and Agent ID are required', 'error')
+      return
+    }
+    if (cases.length === 0) {
+      showToast('Add at least one test case', 'error')
+      return
+    }
+
+    setCreating(true)
     try {
       // Create eval set
-      const setResponse = await fetch('/api/sets', {
+      const setResp = await fetch('/api/sets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description, agentId }),
+        body: JSON.stringify({ name, description, agentId, agentSchema: agentSchemaData }),
       })
 
-      if (!setResponse.ok) {
-        throw new Error('Failed to create eval set')
-      }
+      if (!setResp.ok) throw new Error('Failed to create eval set')
+      const setData = await setResp.json()
 
-      const setData = await setResponse.json()
-
-      // If we have generated cases, add them
-      if (generatedCases.length > 0) {
-        await Promise.all(
-          generatedCases.map((testCase) =>
-            fetch('/api/cases', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                evalSetId: setData.id,
-                query: testCase.query,
-                expectedAnswer: testCase.expectedAnswer,
-                context: testCase.context,
-              }),
-            })
-          )
+      // Add all cases
+      await Promise.all(
+        cases.map(tc =>
+          fetch('/api/cases', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              evalSetId: setData.id,
+              query: tc.query,
+              evalGuidance: tc.evalGuidance || null,
+              fields: tc.fields || null,
+            }),
+          })
         )
-      }
+      )
 
       showToast('Eval set created!', 'success')
       router.push(`/sets/${setData.id}`)
-    } catch (error) {
-      console.error('Error creating eval set:', error)
+    } catch {
       showToast('Failed to create eval set', 'error')
     } finally {
-      setLoading(false)
+      setCreating(false)
     }
   }
+
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'generate', label: 'Generate' },
+    { id: 'csv', label: 'Upload CSV' },
+    { id: 'manual', label: 'Manual' },
+  ]
 
   return (
     <div className="max-w-2xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Create Eval Set</h1>
-        <p className="text-gray-600 mt-1">
-          Define a new evaluation set for your agent
+        <h1 className="text-3xl font-bold text-[#1A1A1A]">Create Eval Set</h1>
+        <p className="text-cement mt-1">
+          Set up an evaluation for your Glean agent
         </p>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-8">
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Name */}
+      <div className="space-y-6">
+        {/* Agent ID */}
+        <div className="bg-white rounded-lg shadow-card border border-border p-6">
+          <label htmlFor="agentId" className="block text-sm font-medium text-[#1A1A1A] mb-2">
+            Agent ID
+          </label>
+          <div className="relative">
+            <input
+              type="text"
+              id="agentId"
+              value={agentId}
+              onChange={(e) => handleAgentIdChange(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-glean-blue/30 focus:border-glean-blue font-mono text-sm"
+              placeholder="e.g., 3385428f65c54c94a8da40aa0a8243f3"
+              required
+            />
+            {fetchingAgent && (
+              <span className="absolute right-3 top-2.5 text-xs text-cement">Fetching...</span>
+            )}
+          </div>
+          {agentFetched && agentName && (
+            <div className="mt-2 px-3 py-2 bg-glean-blue-light rounded-lg text-sm">
+              <span className="font-medium text-[#1A1A1A]">{agentName}</span>
+              {agentDescription && (
+                <p className="text-cement text-xs mt-0.5">{agentDescription}</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Name & Description */}
+        <div className="bg-white rounded-lg shadow-card border border-border p-6 space-y-4">
           <div>
-            <label
-              htmlFor="name"
-              className="block text-sm font-medium text-gray-700 mb-2"
-            >
+            <label htmlFor="name" className="block text-sm font-medium text-[#1A1A1A] mb-2">
               Name
             </label>
             <input
@@ -140,124 +375,361 @@ export default function NewEvalSet() {
               id="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g., Customer Support Agent Evaluation"
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-glean-blue/30 focus:border-glean-blue"
+              placeholder="e.g., Account Briefing Agent"
               required
             />
           </div>
-
-          {/* Description */}
           <div>
-            <label
-              htmlFor="description"
-              className="block text-sm font-medium text-gray-700 mb-2"
-            >
+            <label htmlFor="description" className="block text-sm font-medium text-[#1A1A1A] mb-2">
               Description
             </label>
             <textarea
               id="description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 h-24 resize-none"
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-glean-blue/30 focus:border-glean-blue h-20 resize-none"
               placeholder="What does this eval set test?"
-              required
             />
           </div>
+        </div>
 
-          {/* Agent ID */}
-          <div>
-            <label
-              htmlFor="agentId"
-              className="block text-sm font-medium text-gray-700 mb-2"
+        {/* How to Build a Test Set */}
+        <div className="bg-glean-blue-light rounded-lg border border-glean-blue/20 p-5">
+          <h3 className="text-sm font-semibold text-[#1A1A1A] mb-2">
+            How to build a test set
+          </h3>
+          <p className="text-sm text-cement leading-relaxed">
+            Glean Agents may produce different answers over time as underlying source data changes.
+            Traditional evaluation approaches — where you score against a static "expected answer" — break down
+            quickly in this environment, a problem known as{' '}
+            <strong className="text-[#1A1A1A]">eval decay</strong> (<a href="https://arxiv.org/abs/2305.14795" target="_blank" rel="noopener" className="text-glean-blue hover:underline">FreshQA</a>,{' '}
+            Vu et al. 2023; <a href="https://arxiv.org/abs/2209.13232" target="_blank" rel="noopener" className="text-glean-blue hover:underline">StreamingQA</a>, Liska et al. 2022).
+          </p>
+          <p className="text-sm text-cement leading-relaxed mt-2">
+            Seer addresses this by evaluating <strong className="text-[#1A1A1A]">themes instead of exact answers</strong>.
+            Each test case includes <em>eval guidance</em> — a description of what topics a good response should cover,
+            not the specific words it should say. Because themes are stable even as facts change, your test sets remain
+            valid without constant maintenance.
+          </p>
+          <p className="text-sm text-cement leading-relaxed mt-2">
+            The judge evaluates across multiple dimensions: <strong className="text-[#1A1A1A]">coverage</strong> checks
+            themes against your guidance, <strong className="text-[#1A1A1A]">faithfulness</strong> checks claims against
+            the agent's own retrieved documents (no guidance needed), and{' '}
+            <strong className="text-[#1A1A1A]">factuality</strong> independently verifies claims via live search.
+          </p>
+          <p className="text-sm text-cement leading-relaxed mt-2">
+            We recommend using <strong className="text-[#1A1A1A]">Generate</strong> to create your first test
+            cases — it uses Glean's search to find real inputs and ground eval guidance in current company data.
+          </p>
+          <div className="mt-3 flex justify-end">
+            <a
+              href="https://docs.google.com/document/d/1heJh_0g9GxAj48bOGELr-OlnTdT6d-41cZ4ICo85mBM/edit?usp=sharing"
+              target="_blank"
+              rel="noopener"
+              className="text-xs text-glean-blue hover:text-glean-blue-hover font-medium transition-colors"
             >
-              Agent ID
-            </label>
-            <input
-              type="text"
-              id="agentId"
-              value={agentId}
-              onChange={(e) => handleAgentIdChange(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
-              placeholder="e.g., 3385428f65c54c94a8da40aa0a8243f3"
-              required
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Enter agent ID - test cases will auto-generate
-            </p>
+              Read more →
+            </a>
+          </div>
+        </div>
+
+        {/* Test Cases Section */}
+        <div className="bg-white rounded-lg shadow-card border border-border">
+          <div className="px-6 pt-5 pb-3">
+            <h2 className="text-sm font-semibold text-[#1A1A1A]">Test Cases</h2>
+            <p className="text-xs text-cement mt-1">Add test cases using any method below</p>
           </div>
 
-          {/* Actions */}
-          <div className="flex gap-4 pt-4">
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading ? 'Creating...' : 'Create Eval Set'}
-            </button>
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-
-        {/* AI Generation */}
-        <div className="mt-8 pt-8 border-t border-gray-200">
-          <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200">
-            <div className="text-2xl">✨</div>
-            <div className="flex-1">
-              <h3 className="text-sm font-semibold text-gray-900 mb-1">
-                AI-Powered Generation
-              </h3>
-              <p className="text-xs text-gray-600 mb-3">
-                Automatically generate test cases using Glean's knowledge base
-                and agent schema.
-              </p>
+          {/* Tabs */}
+          <div className="border-b border-border px-6 flex gap-0">
+            {tabs.map(tab => (
               <button
-                type="button"
-                onClick={handleAIGenerate}
-                disabled={!agentId || generatingAI}
-                className="px-4 py-2 text-sm bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
+                  activeTab === tab.id
+                    ? 'text-glean-blue'
+                    : 'text-cement hover:text-[#1A1A1A]'
+                }`}
               >
-                {generatingAI ? 'Generating...' : '✨ Generate with AI'}
+                {tab.label}
+                {activeTab === tab.id && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-glean-blue" />
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab Content */}
+          <div className="p-6">
+            {/* Generate Tab */}
+            {activeTab === 'generate' && (
+              <div className="space-y-4">
+                <p className="text-sm text-cement">
+                  Generate test cases using Glean's ADVANCED agent with company tools.
+                  Finds real inputs from your CRM and docs, then generates eval guidance.
+                </p>
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-[#1A1A1A] font-medium">Count:</label>
+                  <select
+                    value={generateCount}
+                    onChange={(e) => setGenerateCount(Number(e.target.value))}
+                    disabled={generating}
+                    className="px-3 py-1.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30 disabled:opacity-50"
+                  >
+                    <option value={3}>3 cases</option>
+                    <option value={5}>5 cases</option>
+                    <option value={10}>10 cases</option>
+                  </select>
+                  <button
+                    onClick={handleGenerate}
+                    disabled={!agentId || generating}
+                    className="px-4 py-1.5 text-sm bg-glean-blue text-white rounded-lg hover:bg-glean-blue-hover disabled:bg-cement-light disabled:cursor-not-allowed transition-colors"
+                  >
+                    {generating ? 'Generating...' : 'Generate'}
+                  </button>
+                </div>
+
+                {/* Generation Progress */}
+                {generating && generatePhase && (
+                  <div className="flex items-center gap-3 p-3 bg-surface-page rounded-lg border border-border-subtle">
+                    <div className="relative w-5 h-5 shrink-0">
+                      <div className="absolute inset-0 border-2 border-border rounded-full" />
+                      <div
+                        className="absolute inset-0 border-2 border-glean-blue rounded-full animate-spin"
+                        style={{ borderTopColor: 'transparent', borderRightColor: 'transparent' }}
+                      />
+                    </div>
+                    <span className="text-sm text-[#1A1A1A]">{generatePhase}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* CSV Tab */}
+            {activeTab === 'csv' && (
+              <div className="space-y-4">
+                <p className="text-sm text-cement">
+                  Upload a CSV file with columns: <code className="text-xs bg-surface-page px-1 py-0.5 rounded font-mono">query,eval_guidance</code>.
+                  Header row is optional. Eval guidance column is optional.
+                </p>
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv"
+                    onChange={handleCSVUpload}
+                    className="block w-full text-sm text-cement
+                      file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border file:border-border
+                      file:text-sm file:font-medium file:bg-surface-page file:text-[#1A1A1A]
+                      hover:file:bg-glean-oatmeal-dark file:cursor-pointer file:transition-colors"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Manual Tab */}
+            {activeTab === 'manual' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-[#1A1A1A] mb-1">
+                    Query <span className="text-score-fail">*</span>
+                  </label>
+                  <textarea
+                    value={manualQuery}
+                    onChange={(e) => setManualQuery(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-glean-blue/30 focus:border-glean-blue text-sm"
+                    rows={2}
+                    placeholder="What should the agent be asked?"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#1A1A1A] mb-1">
+                    Eval Guidance <span className="text-cement text-xs font-normal">(optional)</span>
+                  </label>
+                  <textarea
+                    value={manualGuidance}
+                    onChange={(e) => setManualGuidance(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-glean-blue/30 focus:border-glean-blue text-sm"
+                    rows={2}
+                    placeholder="What themes should the response cover?"
+                  />
+                </div>
+                <button
+                  onClick={handleAddManual}
+                  disabled={!manualQuery.trim()}
+                  className="px-4 py-1.5 text-sm bg-glean-blue text-white rounded-lg hover:bg-glean-blue-hover disabled:bg-cement-light disabled:cursor-not-allowed transition-colors"
+                >
+                  Add Case
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Case Preview */}
+        {cases.length > 0 && (
+          <div className="bg-white rounded-lg shadow-card border border-border">
+            <div className="px-6 py-3 border-b border-border flex items-center justify-between">
+              <span className="text-xs font-medium text-cement uppercase tracking-wide">
+                Test Cases ({cases.length})
+              </span>
+              <button
+                onClick={() => setCases([])}
+                className="text-xs text-score-fail hover:text-red-700 transition-colors"
+              >
+                Clear All
               </button>
             </div>
-          </div>
-
-          {/* Generated Cases Preview */}
-          {showReview && generatedCases.length > 0 && (
-            <div className="mt-6 p-4 bg-white rounded-lg border border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-900 mb-3">
-                Generated Test Cases ({generatedCases.length})
-              </h3>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {generatedCases.map((testCase, i) => (
-                  <div
-                    key={i}
-                    className="p-3 bg-gray-50 rounded border border-gray-200 text-sm"
-                  >
-                    <div className="font-medium text-gray-900">
-                      {i + 1}. {testCase.query}
-                    </div>
-                    {testCase.expectedAnswer && (
-                      <div className="text-xs text-gray-600 mt-1">
-                        Expected: {testCase.expectedAnswer}
+            <div className="divide-y divide-border-subtle max-h-[32rem] overflow-y-auto">
+              {cases.map((tc, i) => (
+                <div key={i} className="px-6 py-3 group hover:bg-surface-page/50">
+                  {editingIndex === i ? (
+                    /* Edit mode */
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-cement font-mono">Case {i + 1}</span>
                       </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs text-gray-500 mt-3">
-                These cases will be added when you create the eval set.
-              </p>
+                      <div>
+                        <label className="text-[10px] font-medium text-cement uppercase block mb-1">Query</label>
+                        <textarea
+                          value={editQuery}
+                          onChange={(e) => setEditQuery(e.target.value)}
+                          className="w-full px-3 py-2 border border-glean-blue rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
+                          rows={2}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-cement uppercase block mb-1">Eval Guidance</label>
+                        <textarea
+                          value={editGuidance}
+                          onChange={(e) => setEditGuidance(e.target.value)}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
+                          rows={3}
+                          placeholder="What themes should the response cover?"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={saveEdit}
+                          className="px-3 py-1 text-xs bg-glean-blue text-white rounded-md hover:bg-glean-blue-hover transition-colors"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          className="px-3 py-1 text-xs text-cement border border-border rounded-md hover:bg-surface-page transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* View mode */
+                    <div className="flex items-start gap-3">
+                      <span className="text-xs text-cement font-mono mt-0.5 w-6 shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-[#1A1A1A] break-words font-medium">{tc.query}</p>
+                        {tc.fields && Object.keys(tc.fields).length > 1 && (
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {Object.entries(tc.fields).slice(1).filter(([, v]) => v).map(([k, v]) => (
+                              <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-surface-page text-cement border border-border-subtle">
+                                {k}: {v}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {tc.evalGuidance && (
+                          <div className="mt-1.5">
+                            <Markdown content={tc.evalGuidance} className="text-xs text-cement" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-page text-cement border border-border-subtle">
+                          {tc.source}
+                        </span>
+                        <button
+                          onClick={() => startEdit(i)}
+                          className="text-cement hover:text-glean-blue opacity-0 group-hover:opacity-100 transition-all text-xs px-1"
+                          title="Edit"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleRemoveCase(i)}
+                          className="text-cement hover:text-score-fail opacity-0 group-hover:opacity-100 transition-all text-sm px-1"
+                          title="Remove"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
+
+        {/* Create Button */}
+        <div className="flex gap-4">
+          <button
+            onClick={handleSubmit}
+            disabled={creating || !name.trim() || !agentId.trim() || cases.length === 0}
+            className="flex-1 px-4 py-2.5 bg-glean-blue text-white rounded-lg hover:bg-glean-blue-hover disabled:bg-cement-light disabled:cursor-not-allowed transition-colors font-medium"
+          >
+            {creating ? 'Creating...' : `Create Eval Set (${cases.length} cases)`}
+          </button>
+          <button
+            onClick={() => router.back()}
+            className="px-4 py-2.5 border border-border text-cement rounded-lg hover:bg-surface-page transition-colors"
+          >
+            Cancel
+          </button>
         </div>
       </div>
     </div>
   )
+}
+
+/**
+ * Parse a single CSV line, handling quoted fields.
+ * Handles: field1,field2 and "field, with comma","field2"
+ */
+function parseCSVLine(line: string): string[] {
+  const fields: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+
+    if (inQuotes) {
+      if (ch === '"') {
+        // Check for escaped quote
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"'
+          i++ // skip next quote
+        } else {
+          inQuotes = false
+        }
+      } else {
+        current += ch
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true
+      } else if (ch === ',') {
+        fields.push(current.trim())
+        current = ''
+      } else {
+        current += ch
+      }
+    }
+  }
+
+  fields.push(current.trim())
+  return fields
 }

@@ -2,7 +2,9 @@ import { db, evalSets, evalCases, evalRuns, evalResults, evalScores } from '@/li
 import { eq, desc } from 'drizzle-orm'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import RunEvalButton from '@/components/RunEvalButton'
+import EvalConfigSection from '@/components/EvalConfigSection'
+import ResetRunsButton from '@/components/ResetRunsButton'
+import CaseTable from '@/components/CaseTable'
 import { InfoIcon } from '@/components/Tooltip'
 
 export const dynamic = 'force-dynamic'
@@ -80,8 +82,18 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
                 {evalSet.cases.length} test inputs
               </span>
             </div>
+            {/* Agent Schema (expandable) */}
+            {evalSet.agentSchema && (
+              <details className="mt-3">
+                <summary className="text-xs text-cement cursor-pointer hover:text-[#1A1A1A] transition-colors select-none">
+                  Agent Config
+                </summary>
+                <pre className="mt-2 p-3 bg-surface-page rounded-lg border border-border-subtle text-xs font-mono text-cement overflow-x-auto max-h-64 overflow-y-auto leading-relaxed">
+                  {JSON.stringify(JSON.parse(evalSet.agentSchema), null, 2)}
+                </pre>
+              </details>
+            )}
           </div>
-          <RunEvalButton evalSetId={params.id} hasCases={evalSet.cases.length > 0} />
         </div>
       </div>
 
@@ -135,7 +147,7 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
                 <div className="flex flex-wrap gap-2">
                   {latestRun.criteria.map((c: string) => {
                     const tooltips: Record<string, string> = {
-                      topical_coverage: 'Reference-based: decomposes eval guidance into themes (COVERED/TOUCHED/MISSING) and scores coverage ratio.',
+                      topical_coverage: 'Reference-based: decomposes eval guidance into themes (COVERED/TOUCHED/MISSING) and scores coverage ratio. Eval guidance describes themes to cover, not exact text to match.',
                       response_quality: 'Reference-based: evaluates structure, conciseness, and actionability independent of factual content.',
                       groundedness: 'Reference-free: checks if claims are supported by docs the agent actually retrieved. No expected answer needed — immune to data staleness.',
                       hallucination_risk: 'Reference-free: flags specific claims (names, numbers, dates) that lack source backing in the agent\'s reasoning chain.',
@@ -156,15 +168,19 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
       ) : (
         <div className="bg-white rounded-lg shadow-card border border-border p-8 mb-6 text-center">
           <p className="text-cement mb-2">No evaluation runs yet</p>
-          <p className="text-xs text-cement-light">Click "Run Evaluation" to score this agent</p>
+          <p className="text-xs text-cement-light">Configure and run an evaluation below</p>
         </div>
       )}
+
+      {/* Eval Config Section (replaces modal) */}
+      <EvalConfigSection evalSetId={params.id} hasCases={evalSet.cases.length > 0} />
 
       {/* Run History */}
       {evalSet.runs.length > 0 && (
         <div className="bg-white rounded-lg shadow-card border border-border mb-6">
-          <div className="px-5 py-3 border-b border-border">
+          <div className="px-5 py-3 border-b border-border flex items-center justify-between">
             <span className="text-xs font-medium text-cement uppercase tracking-wide">Run History</span>
+            <ResetRunsButton evalSetId={params.id} />
           </div>
           <div className="divide-y divide-border-subtle">
             {evalSet.runs.map((run) => (
@@ -200,46 +216,15 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
         </div>
       )}
 
-      {/* Test Inputs (collapsible) */}
-      <details className="bg-white rounded-lg shadow-card border border-border">
-        <summary className="px-5 py-3 cursor-pointer hover:bg-surface-page/50 transition-colors flex items-center justify-between list-none">
+      {/* Test Inputs (CaseTable with edit/delete) */}
+      <div className="bg-white rounded-lg shadow-card border border-border">
+        <div className="px-5 py-3 border-b border-border">
           <span className="text-xs font-medium text-cement uppercase tracking-wide">
             Test Inputs ({evalSet.cases.length})
           </span>
-          <span className="text-cement text-xs">▾</span>
-        </summary>
-        <div className="border-t border-border">
-          {evalSet.cases.length === 0 ? (
-            <div className="p-8 text-center text-cement text-sm">
-              No test inputs yet. Generate them with the CLI or add manually.
-            </div>
-          ) : (
-            <div className="divide-y divide-border-subtle">
-              {evalSet.cases.map((c, i) => (
-                <div key={c.id} className="px-5 py-3">
-                  <div className="flex items-start gap-3">
-                    <span className="text-xs font-mono text-cement-light mt-0.5">{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-[#1A1A1A]">{c.query}</p>
-                      {c.expectedAnswer && (
-                        <details className="mt-1.5">
-                          <summary className="text-xs text-cement cursor-pointer hover:text-[#1A1A1A] inline-flex items-center gap-0.5">
-                            Eval guidance
-                            <InfoIcon text="Theme guide for the coverage judge — not an exact answer to match. The judge decomposes this into topics and checks which ones the response covers. Themes are more stable than facts as company data changes (FreshQA, Vu et al. 2023)." wide />
-                          </summary>
-                          <p className="text-xs text-cement mt-1 leading-relaxed line-clamp-4">
-                            {c.expectedAnswer}
-                          </p>
-                        </details>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
-      </details>
+        <CaseTable cases={evalSet.cases} evalSetId={params.id} />
+      </div>
     </div>
   )
 }

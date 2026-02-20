@@ -1,17 +1,22 @@
 import { NextResponse } from 'next/server'
-import { db, evalSets, evalCases, evalRuns, evalResults, evalScores, evalCriteria } from '@/lib/db'
-import { eq } from 'drizzle-orm'
-import { nanoid } from 'nanoid'
+import { db, evalSets, evalCases, evalRuns, evalResults, evalScores } from '@/lib/db'
+import { eq, inArray } from 'drizzle-orm'
 
 // Import from CLI code
 import { runAgent } from '../../../../src/data/glean'
-import { judgeResponse } from '../../../../src/lib/judge'
+import { judgeResponseBatch } from '../../../../src/lib/judge'
 import { getCriterion } from '../../../../src/criteria/defaults'
+import { generateId } from '../../../../src/lib/id'
 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { evalSetId, criteria = ['task_success', 'factuality', 'relevance'], judgeModel = 'glean-chat' } = body
+    const {
+      evalSetId,
+      criteria = ['topical_coverage', 'response_quality', 'groundedness', 'hallucination_risk'],
+      judges = ['opus-4-6'],
+      mode = 'quick',
+    } = body
 
     if (!evalSetId) {
       return NextResponse.json({ error: 'Missing eval set ID' }, { status: 400 })
@@ -30,18 +35,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No test cases found' }, { status: 400 })
     }
 
-    // Get criteria
-    const criteriaObjs = criteria.map(id => {
+    // Resolve criteria definitions
+    const criteriaObjs = criteria.map((id: string) => {
       const criterion = getCriterion(id)
       if (!criterion) throw new Error(`Unknown criterion: ${id}`)
       return criterion
     })
 
     // Create run
-    let runId = nanoid(12)
-    while (runId.startsWith('-')) {
-      runId = nanoid(12)
-    }
+    const runId = generateId()
 
     await db.insert(evalRuns).values({
       id: runId,
@@ -49,11 +51,17 @@ export async function POST(request: Request) {
       status: 'running',
       startedAt: new Date(),
       completedAt: null,
-      config: JSON.stringify({ criteria, judgeModel })
+      config: JSON.stringify({
+        criteria,
+        judgeModel: judges.length > 1 ? 'ensemble' : judges[0] || 'opus-4-6',
+        judges,
+        mode,
+        multiJudge: judges.length > 1,
+      })
     })
 
     // Process cases (async - don't block response)
-    processCases(runId, set.agentId, cases, criteriaObjs, judgeModel).catch(console.error)
+    processCases(runId, set.agentId, cases, criteriaObjs, judges.length > 1).catch(console.error)
 
     return NextResponse.json({ runId, status: 'started' })
   } catch (error) {
@@ -65,69 +73,122 @@ export async function POST(request: Request) {
   }
 }
 
-async function processCases(runId: string, agentId: string, cases: any[], criteria: any[], judgeModel: string) {
+export async function DELETE(request: Request) {
+  try {
+    const body = await request.json()
+    const { evalSetId } = body
+
+    if (!evalSetId) {
+      return NextResponse.json({ error: 'Missing eval set ID' }, { status: 400 })
+    }
+
+    // 1. Get all run IDs for this eval set
+    const runs = await db.select({ id: evalRuns.id }).from(evalRuns).where(eq(evalRuns.evalSetId, evalSetId))
+    const runIds = runs.map(r => r.id)
+
+    if (runIds.length === 0) {
+      return NextResponse.json({ deleted: 0 })
+    }
+
+    // 2. Get all result IDs for those runs
+    const results = await db.select({ id: evalResults.id }).from(evalResults).where(inArray(evalResults.runId, runIds))
+    const resultIds = results.map(r => r.id)
+
+    // 3. Cascade delete: scores → results → runs
+    if (resultIds.length > 0) {
+      await db.delete(evalScores).where(inArray(evalScores.resultId, resultIds))
+      await db.delete(evalResults).where(inArray(evalResults.runId, runIds))
+    }
+    await db.delete(evalRuns).where(eq(evalRuns.evalSetId, evalSetId))
+
+    return NextResponse.json({ deleted: runIds.length })
+  } catch (error) {
+    console.error('Error clearing runs:', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to clear runs' },
+      { status: 500 }
+    )
+  }
+}
+
+async function processCases(
+  runId: string,
+  agentId: string,
+  cases: any[],
+  criteria: any[],
+  multiJudge: boolean,
+) {
   const results: any[] = []
 
   for (const testCase of cases) {
     try {
-      // Run agent
-      const agentResult = await runAgent(agentId, testCase.query, testCase.id)
+      // 1. Run agent (use structured fields from metadata if available)
+      const caseMetadata = testCase.metadata ? JSON.parse(testCase.metadata) : null
+      const structuredFields = caseMetadata?.fields as Record<string, string> | undefined
+      const agentResult = await runAgent(agentId, testCase.query, testCase.id, structuredFields)
 
-      // Judge each criterion
-      const scores: any[] = []
-      for (const criterion of criteria) {
-        const score = await judgeResponse(
-          criterion,
-          testCase.query,
-          agentResult.response,
-          agentResult,
-          testCase.expectedAnswer || undefined,
-          judgeModel
-        )
-        scores.push(score)
+      // 2. Judge (batched by call type — coverage, faithfulness, factuality)
+      const scores = await judgeResponseBatch(
+        criteria,
+        testCase.query,
+        agentResult.response,
+        agentResult,
+        testCase.evalGuidance || undefined,
+        multiJudge,
+      )
+
+      // 3. Calculate overall score (weighted average, converting categories to numeric)
+      // Mirrors CLI logic at cli.ts:211-234
+      let totalWeightedScore = 0
+      let totalWeight = 0
+
+      for (const score of scores) {
+        const criterion = getCriterion(score.criterionId)
+        if (!criterion || criterion.scoreType === 'metric') continue
+
+        let numericValue: number | undefined
+        if (score.scoreValue !== undefined) {
+          // Binary scores: 0 or 1, scale to 0-10
+          numericValue = score.scoreValue * 10
+        } else if (score.scoreCategory && criterion.scaleConfig?.categoryValues) {
+          // Categorical scores: map to numeric via categoryValues
+          numericValue = criterion.scaleConfig.categoryValues[score.scoreCategory.toLowerCase()] ?? 0
+        }
+
+        if (numericValue !== undefined) {
+          totalWeightedScore += numericValue * criterion.weight
+          totalWeight += criterion.weight
+        }
       }
 
-      // Calculate overall score (average of scored criteria, excluding metrics)
-      const scoredValues = scores
-        .filter(s => s.scoreValue !== null && s.scoreValue !== undefined)
-        .map(s => s.scoreValue!)
-      const overallScore = scoredValues.length > 0
-        ? scoredValues.reduce((sum, val) => sum + val, 0) / scoredValues.length
-        : 0
+      const overallScore = totalWeight > 0 ? totalWeightedScore / totalWeight : 0
 
-      // Store result
-      let resultId = nanoid(12)
-      while (resultId.startsWith('-')) {
-        resultId = nanoid(12)
-      }
+      // 4. Store result
+      const resultId = generateId()
 
       await db.insert(evalResults).values({
         id: resultId,
         runId,
         caseId: testCase.id,
         agentResponse: agentResult.response,
+        agentTrace: agentResult.reasoningChain ? JSON.stringify(agentResult.reasoningChain) : null,
         latencyMs: agentResult.latencyMs,
-        totalTokens: agentResult.totalTokens || null,
+        totalTokens: null, // Not available via REST API
         toolCalls: JSON.stringify(agentResult.toolCalls || []),
         overallScore,
         timestamp: new Date()
       })
 
-      // Store individual scores
+      // 5. Store individual scores
       for (const score of scores) {
-        let scoreId = nanoid(12)
-        while (scoreId.startsWith('-')) {
-          scoreId = nanoid(12)
-        }
-
         await db.insert(evalScores).values({
-          id: scoreId,
+          id: generateId(),
           resultId,
           criterionId: score.criterionId,
-          scoreValue: score.scoreValue,
+          scoreValue: score.scoreValue !== undefined ? score.scoreValue : null,
           scoreCategory: score.scoreCategory || null,
           reasoning: score.reasoning,
-          judgeModel,
+          judgeModel: score.judgeModel || null,
           timestamp: new Date()
         })
       }

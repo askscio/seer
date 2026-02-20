@@ -11,6 +11,7 @@ export const evalSets = sqliteTable('eval_sets', {
   name: text('name').notNull(),
   description: text('description'),
   agentId: text('agent_id').notNull(),
+  agentSchema: text('agent_schema'), // JSON: full agent schema snapshot at creation time
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull()
 })
 
@@ -19,7 +20,7 @@ export const evalCases = sqliteTable('eval_cases', {
   id: text('id').primaryKey(),
   evalSetId: text('eval_set_id').notNull().references(() => evalSets.id),
   query: text('query').notNull(),
-  expectedAnswer: text('expected_answer'),
+  evalGuidance: text('eval_guidance'),
   context: text('context'),
   metadata: text('metadata'), // JSON
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull()
@@ -31,7 +32,7 @@ export const evalCriteria = sqliteTable('eval_criteria', {
   name: text('name').notNull(),
   description: text('description'),
   rubric: text('rubric').notNull(),
-  scoreType: text('score_type').notNull(), // 'binary' | 'categorical' | 'continuous' | 'metric'
+  scoreType: text('score_type').notNull(), // 'binary' | 'categorical' | 'metric'
   scaleConfig: text('scale_config'), // JSON: { type: '0-10', categories: [...], etc }
   weight: real('weight').notNull().default(1.0),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false)
@@ -55,6 +56,7 @@ export const evalResults = sqliteTable('eval_results', {
 
   // Agent response
   agentResponse: text('agent_response').notNull(),
+  agentTrace: text('agent_trace'), // JSON: reasoning chain (searches, docs read, tool invocations)
   latencyMs: integer('latency_ms').notNull(),
   totalTokens: integer('total_tokens'),
   toolCalls: text('tool_calls'), // JSON array

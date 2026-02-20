@@ -10,6 +10,7 @@
  */
 
 import { config } from '../lib/config'
+import { extractContentWithFallback } from '../lib/extract-content'
 import type { AgentResult } from '../types'
 
 interface RunWorkflowFragment {
@@ -72,7 +73,8 @@ async function getAgentSchema(agentId: string): Promise<AgentSchema> {
 export async function runAgent(
   agentId: string,
   query: string,
-  caseId: string
+  caseId: string,
+  structuredFields?: Record<string, string>,
 ): Promise<AgentResult> {
   const startTime = Date.now()
 
@@ -88,7 +90,24 @@ export async function runAgent(
   }
 
   if (hasFormInputs) {
-    payload.fields = { [inputFields[0]]: query }
+    // Populate all schema fields — Glean agents 500 if fields are missing.
+    // Use structured fields from case metadata if available,
+    // otherwise fall back to primary field = query, rest = empty.
+    const fields: Record<string, string> = {}
+    for (const field of inputFields) {
+      fields[field] = ''
+    }
+    if (structuredFields) {
+      // Map stored fields onto schema fields
+      for (const [key, value] of Object.entries(structuredFields)) {
+        if (key in fields) {
+          fields[key] = value
+        }
+      }
+    } else {
+      fields[inputFields[0]] = query
+    }
+    payload.fields = fields
   } else {
     payload.messages = [{
       author: 'USER',
@@ -105,6 +124,7 @@ export async function runAgent(
         'Authorization': `Bearer ${config.gleanApiKey}`,
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(120_000),
     }
   )
 
@@ -131,7 +151,7 @@ export async function runAgent(
   }
 
   // Final response text — CONTENT messages only (not intermediate UPDATE steps)
-  const responseText = extractFinalResponse(data.messages)
+  const responseText = extractFinalResponse(data)
 
   // Reasoning chain — search queries, docs read, steps taken
   const reasoningChain = extractReasoningChain(data.messages)
@@ -151,32 +171,12 @@ export async function runAgent(
 /**
  * Extract final response text from CONTENT-type messages only
  * Skips intermediate UPDATE messages (search queries, "Searching...", etc.)
+ * Delegates to shared extract-content utility with GLEAN_AI fallback.
  */
-function extractFinalResponse(messages: RunWorkflowMessage[]): string {
-  const contentMessages = messages.filter(
-    m => m.author === 'GLEAN_AI' && m.messageType === 'CONTENT'
-  )
-
-  const texts = contentMessages
-    .flatMap(m => m.fragments || [])
-    .map(f => f.text)
-    .filter(t => t)
-    .join('')
-
-  if (!texts) {
-    // Fallback: try all GLEAN_AI messages if no CONTENT type found
-    const fallback = messages
-      .filter(m => m.author === 'GLEAN_AI')
-      .flatMap(m => m.fragments || [])
-      .map(f => f.text)
-      .filter(t => t)
-      .join('')
-
-    if (!fallback) throw new Error('No response text found in agent output')
-    return fallback
-  }
-
-  return texts
+function extractFinalResponse(data: RunWorkflowResponse): string {
+  const text = extractContentWithFallback(data)
+  if (!text) throw new Error('No response text found in agent output')
+  return text
 }
 
 /**
@@ -240,6 +240,28 @@ function extractReasoningChain(messages: RunWorkflowMessage[]): any[] {
     if (action?.action?.metadata) {
       step.action = action.action.metadata.displayName || action.action.metadata.name
       step.type = step.type || 'action'
+    }
+
+    // Collect text content (thinking, intermediate output, generated content)
+    const textParts = msg.fragments
+      ?.filter(f => f.text && f.text.trim())
+      .map(f => f.text!.trim()) || []
+
+    if (textParts.length > 0) {
+      step.text = textParts.join('\n')
+      step.type = step.type || 'thinking'
+    }
+
+    // Collect citations
+    const citations = msg.fragments
+      ?.filter(f => f.citation?.sourceDocument)
+      .map(f => ({
+        title: f.citation!.sourceDocument!.title,
+        url: f.citation!.sourceDocument!.url,
+      })) || []
+
+    if (citations.length > 0) {
+      step.citations = citations
     }
 
     // Only include steps that have meaningful content
