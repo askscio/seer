@@ -44,15 +44,15 @@ export const DEFAULT_CRITERIA: CriterionDefinition[] = [
     id: 'topical_coverage',
     name: 'Topical Coverage',
     description: 'How many of the expected themes does the response address?',
-    rubric: `Decompose the expected answer into discrete themes. For each theme, classify the response's coverage as COVERED (present with useful detail), TOUCHED (mentioned without depth), or MISSING (absent). Then assign a category:
+    rubric: `Decompose the eval guidance into discrete themes. For each theme, classify the response's coverage as COVERED (present with useful detail), TOUCHED (mentioned without depth), or MISSING (absent). Then assign a category:
 
 - full: All major themes COVERED. User could act on this alone. No follow-up needed.
 - substantial: Most themes COVERED (75%+). One or two minor gaps.
 - partial: About half the themes covered. Real value but needs supplementation.
-- minimal: Touches on the topic but delivers little expected content. Generic where specifics were needed.
-- failure: Wrong topic, refusal, error, or no meaningful overlap with expected themes.
+- minimal: Touches on the topic but delivers little guided content. Generic where specifics were needed.
+- failure: Wrong topic, refusal, error, or no meaningful overlap with guided themes.
 
-The expected answer describes themes to cover, not exact text to match. Different wording, structure, and additional correct information are acceptable.`,
+The eval guidance describes themes to cover, not exact text to match. Different wording, structure, and additional correct information are acceptable.`,
     scoreType: 'categorical',
     judgeCall: 'coverage',
     scaleConfig: { categories: QUALITY_CATEGORIES, categoryValues: QUALITY_VALUES },
@@ -105,13 +105,17 @@ You are checking whether the response is faithful to what the agent FOUND — no
     description: 'Does the response contain specific claims without source backing?',
     rubric: `Check for hallucination signals: specific details (names, numbers, dates, metrics) NOT supported by the agent's retrieved documents.
 
-- yes (no hallucination detected): All specific claims have source backing, OR response appropriately hedges.
-- no (hallucination detected): Response asserts specific unsupported details. Flag the claims.
+- low: All specific claims have source backing, OR response appropriately hedges uncertain details. No fabricated specifics.
+- medium: Some specific claims lack clear source backing, but core points are grounded. Minor unsupported details that don't change the overall message.
+- high: Multiple specific unsupported details (names, numbers, dates, metrics) asserted confidently without source backing. Core claims may be fabricated.
 
-A response that says "no data found" when no documents were retrieved is CORRECT behavior.`,
-    scoreType: 'binary',
+A response that says "no data found" when no documents were retrieved is CORRECT behavior (= low risk).`,
+    scoreType: 'categorical',
     judgeCall: 'faithfulness',
-    scaleConfig: {},
+    scaleConfig: {
+      categories: ['low', 'medium', 'high'],
+      categoryValues: { low: 10, medium: 5, high: 0 },
+    },
     weight: 0.8,
   },
 

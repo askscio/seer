@@ -1,15 +1,16 @@
 /**
  * LLM-as-judge with three-call architecture and multi-judge ensemble
  *
- * Call 1 (Coverage):     Reference-based — categorical scoring against expected answer
- * Call 2 (Faithfulness): Reference-free — categorical scoring against agent's own retrieval
- * Call 3 (Factuality):   Search-verified — ADVANCED agent verifies + cites sources
+ * Call 1 (Coverage):     Reference-based — categorical scoring against eval guidance themes
+ * Call 2 (Faithfulness): Source-grounded — reads agent's source docs via search, verifies claims
+ * Call 3 (Factuality):   Search-verified — ADVANCED agent independently verifies + cites sources
  *
- * Multi-judge: runs each call through multiple models, aggregates via median.
+ * Multi-judge: runs each call through multiple models, aggregates via majority vote.
  * Categorical scales per I/O psych SJT research (15% reliability gain).
  */
 
 import { config } from './config'
+import { extractContentTextOrThrow, type GleanResponse } from './extract-content'
 import type { CriterionDefinition } from '../criteria/defaults'
 import type { JudgeScore, AgentResult } from '../types'
 import { extractMetric } from './metrics'
@@ -28,19 +29,19 @@ export async function judgeResponseBatch(
   query: string,
   response: string,
   agentResult: AgentResult,
-  expectedAnswer?: string,
+  evalGuidance?: string,
   multiJudge: boolean = false,
 ): Promise<JudgeScore[]> {
   if (!multiJudge) {
     // Single judge (default — faster)
-    return runJudgePipeline(criteria, query, response, agentResult, expectedAnswer, JUDGE_MODELS[0])
+    return runJudgePipeline(criteria, query, response, agentResult, evalGuidance, JUDGE_MODELS[0])
   }
 
   // Multi-judge: run through all models, aggregate
   console.log(`  → Multi-judge: ${JUDGE_MODELS.map(m => m.name).join(', ')}`)
   const allResults = await Promise.all(
     JUDGE_MODELS.map(model =>
-      runJudgePipeline(criteria, query, response, agentResult, expectedAnswer, model)
+      runJudgePipeline(criteria, query, response, agentResult, evalGuidance, model)
         .catch(err => {
           console.warn(`  ⚠ ${model.name} failed: ${err.message}`)
           return null
@@ -69,9 +70,9 @@ export async function judgeResponse(
   query: string,
   response: string,
   agentResult: AgentResult,
-  expectedAnswer?: string,
+  evalGuidance?: string,
 ): Promise<JudgeScore> {
-  const scores = await judgeResponseBatch([criterion], query, response, agentResult, expectedAnswer)
+  const scores = await judgeResponseBatch([criterion], query, response, agentResult, evalGuidance)
   return scores[0]
 }
 
@@ -83,7 +84,7 @@ async function runJudgePipeline(
   query: string,
   response: string,
   agentResult: AgentResult,
-  expectedAnswer: string | undefined,
+  evalGuidance: string | undefined,
   model: { id: string; name: string },
 ): Promise<JudgeScore[]> {
   const scores: JudgeScore[] = []
@@ -98,7 +99,7 @@ async function runJudgePipeline(
   }
 
   if (coverageCriteria.length > 0) {
-    scores.push(...await judgeCoverageBatch(coverageCriteria, query, response, expectedAnswer, model))
+    scores.push(...await judgeCoverageBatch(coverageCriteria, query, response, evalGuidance, model))
   }
 
   if (faithfulnessCriteria.length > 0) {
@@ -118,7 +119,7 @@ async function judgeCoverageBatch(
   criteria: CriterionDefinition[],
   query: string,
   response: string,
-  expectedAnswer: string | undefined,
+  evalGuidance: string | undefined,
   model: { id: string; name: string },
 ): Promise<JudgeScore[]> {
   const criteriaBlock = criteria.map(c =>
@@ -139,9 +140,9 @@ ${criteriaBlock}
 ${query}
 </query>
 
-${expectedAnswer ? `<expected_answer>
-${expectedAnswer}
-</expected_answer>
+${evalGuidance ? `<eval_guidance>
+${evalGuidance}
+</eval_guidance>
 
 ` : ''}<actual_response>
 ${response}
@@ -149,13 +150,13 @@ ${response}
 
 === INSTRUCTIONS ===
 
-${expectedAnswer ? `1. Extract the key themes from the expected answer
+${evalGuidance ? `1. Extract the key themes from the eval guidance
 2. For each theme, classify coverage: COVERED / TOUCHED / MISSING
 3. Assign a category for each dimension using the rubric
 ` : `1. Evaluate the response directly against the query
 2. Assign a category for each dimension using the rubric
 `}
-The expected answer is ONE valid answer, not THE only valid answer. Do not penalize different wording or additional correct information. Evaluate information density, not length.
+The eval guidance describes ONE valid answer, not THE only valid answer. Do not penalize different wording or additional correct information. Evaluate information density, not length.
 
 <theme_coverage>
 - [theme]: [COVERED/TOUCHED/MISSING]
@@ -167,7 +168,7 @@ ${scoreFormat}`
   return criteria.map(c => parseScore(text, c, model.name))
 }
 
-// ===== Call 2: Faithfulness (reference-free, categorical) =====
+// ===== Call 2: Faithfulness (source-grounded, tool-assisted) =====
 
 async function judgeFaithfulnessBatch(
   criteria: CriterionDefinition[],
@@ -177,6 +178,17 @@ async function judgeFaithfulnessBatch(
   model: { id: string; name: string },
 ): Promise<JudgeScore[]> {
   const chainText = formatReasoningChain(reasoningChain)
+
+  // Extract document references from the reasoning chain for the judge to read
+  const sourceDocs = reasoningChain
+    ?.filter(s => s.documentsRead)
+    .flatMap(s => s.documentsRead)
+    .filter((d: any) => d.title || d.url)
+    .slice(0, 20) || []
+
+  const sourceList = sourceDocs.length > 0
+    ? sourceDocs.map((d: any) => `- ${d.title || 'Untitled'}${d.url ? ` (${d.url})` : ''}`).join('\n')
+    : 'No documents found in the reasoning chain.'
 
   const criteriaBlock = criteria.map(c =>
     `=== ${c.id.toUpperCase()} ===\n${c.name}: ${c.description}\n\n${c.rubric}`
@@ -189,7 +201,7 @@ async function judgeFaithfulnessBatch(
     return `<${c.id}_reasoning>[Your analysis]</${c.id}_reasoning>\n<${c.id}>[${c.scaleConfig?.categories?.join(' / ') || 'value'}]</${c.id}>`
   }).join('\n\n')
 
-  const prompt = `You are evaluating whether an AI agent's response is faithful to what it actually retrieved. You are NOT checking correctness — only whether it accurately represents what was found.
+  const prompt = `You are evaluating whether an AI agent's response is faithful to what it actually retrieved. You are NOT checking correctness — only whether the response accurately represents the content of the source documents.
 
 ${criteriaBlock}
 
@@ -199,9 +211,15 @@ ${criteriaBlock}
 ${query}
 </query>
 
-<reasoning_chain>
+<agent_execution_trace>
 ${chainText || 'No reasoning chain available.'}
-</reasoning_chain>
+</agent_execution_trace>
+
+<agent_source_documents>
+The agent retrieved these documents during execution. Use your search tools to read their actual content, then check if the response faithfully represents what they say.
+
+${sourceList}
+</agent_source_documents>
 
 <actual_response>
 ${response}
@@ -209,19 +227,21 @@ ${response}
 
 === INSTRUCTIONS ===
 
-1. Identify key claims in the response
-2. Check each against the documents in the reasoning chain
-3. Assign categories using the rubrics
+1. Use your company search tools to read the actual content of the source documents listed above
+2. Identify the key claims in the agent's response
+3. For each claim, check whether it is supported by the actual content of the retrieved documents — not just by document titles
+4. Flag any claims where the response misrepresents, exaggerates, or fabricates details that are not in the sources
+5. Assign categories using the rubrics
 
 A response that says "no data found" when no documents were retrieved is CORRECT behavior.
 
 <claim_check>
-- "[claim]": [GROUNDED/UNGROUNDED/HEDGED]
+- "[claim]": [GROUNDED in <source>/UNGROUNDED/HEDGED/MISREPRESENTED from <source>]
 </claim_check>
 
 ${scoreFormat}`
 
-  const text = await callJudge(prompt, model.id)
+  const text = await callJudgeWithTools(prompt, model.id)
   return criteria.map(c => parseScore(text, c, model.name))
 }
 
@@ -368,7 +388,7 @@ async function callJudge(prompt: string, modelSetId: string): Promise<string> {
     throw new Error(`Judge (${modelSetId}) error: ${resp.status} - ${err}`)
   }
 
-  return extractContent(await resp.json())
+  return extractContent(await resp.json() as GleanResponse)
 }
 
 async function callJudgeWithTools(prompt: string, modelSetId: string): Promise<string> {
@@ -395,21 +415,11 @@ async function callJudgeWithTools(prompt: string, modelSetId: string): Promise<s
     throw new Error(`Judge factuality (${modelSetId}) error: ${resp.status} - ${err}`)
   }
 
-  return extractContent(await resp.json())
+  return extractContent(await resp.json() as GleanResponse)
 }
 
-function extractContent(data: any): string {
-  let text = ''
-  for (const msg of data.messages ?? []) {
-    if (msg.author === 'GLEAN_AI' && msg.messageType === 'CONTENT') {
-      for (const f of msg.fragments ?? []) {
-        if (f.text) text += f.text
-      }
-    }
-  }
-  if (!text) throw new Error('No content in judge response')
-  return text
-}
+// Content extraction delegated to shared extract-content.ts
+const extractContent = extractContentTextOrThrow
 
 // ===== Parsing =====
 
