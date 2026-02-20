@@ -1,5 +1,14 @@
+/**
+ * Legacy eval set generator (SDK-based)
+ *
+ * Kept for backward compatibility. The active generator is generate-agent.ts
+ * which uses the ADVANCED toolkit agent with company tools for grounded eval
+ * case generation. This version uses the Glean SDK chat client directly.
+ */
+
 import { Glean } from '@gleanwork/api-client'
 import { config } from './config'
+import { extractContentWithFallback } from './extract-content'
 
 const glean = new Glean({
   apiToken: config.gleanApiKey,
@@ -18,7 +27,7 @@ export interface GeneratedEvalSet {
   description: string
   cases: Array<{
     query: string
-    expectedAnswer?: string
+    evalGuidance?: string
     context?: string
   }>
 }
@@ -161,7 +170,7 @@ async function generateTestCases(
   agentId: string,
   schema: any,
   count: number
-): Promise<Array<{ query: string; expectedAnswer?: string }>> {
+): Promise<Array<{ query: string; evalGuidance?: string }>> {
   const inputFields = Object.keys(schema.input_schema || {})
   const hasFormInputs = inputFields.length > 0
 
@@ -249,30 +258,12 @@ Remember: These test cases should reflect REAL scenarios from this company's ope
 
   const parsedCases = matches.map(match => ({
     query: match[1].trim(),
-    expectedAnswer: match[2]?.trim()
+    evalGuidance: match[2]?.trim()
   }))
 
   // Ensure we return exactly count cases (or fewer if parsing failed)
   return parsedCases.slice(0, count)
 }
 
-/**
- * Extract CONTENT text from Glean chat response (skip intermediate UPDATE messages)
- */
-function extractResponseText(response: any): string {
-  const contentText = response.messages
-    ?.filter((m: any) => m.author === 'GLEAN_AI' && m.messageType === 'CONTENT')
-    .flatMap((m: any) => m.fragments || [])
-    .map((f: any) => f.text)
-    .filter((t: any) => t)
-    .join('') || ''
-
-  if (contentText) return contentText
-
-  return response.messages
-    ?.filter((m: any) => m.author === 'GLEAN_AI')
-    .flatMap((m: any) => m.fragments || [])
-    .map((f: any) => f.text)
-    .filter((t: any) => t)
-    .join('') || ''
-}
+// Content extraction delegated to shared extract-content.ts
+const extractResponseText = extractContentWithFallback

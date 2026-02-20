@@ -6,7 +6,7 @@
 export interface EvalCase {
   id: string
   query: string
-  expectedAnswer?: string  // Optional reference answer
+  evalGuidance?: string  // Optional thematic guidance for coverage judge
   context?: string  // Additional context for judge
   metadata?: Record<string, any>
 }
@@ -63,37 +63,9 @@ export interface EvalRun {
   status: 'running' | 'completed' | 'failed'
   config: {
     criteria: string[]
-    judgeModel: string
-    ensemble?: {
-      models: string[]
-      requireConsensus: boolean
-      consensusThreshold: number
-    }
+    judgeModel: string | string[]
+    judges?: string[]
+    mode?: string
+    multiJudge?: boolean
   }
-}
-
-// Judge configuration
-export interface JudgeConfig {
-  primaryModel: string  // 'claude-sonnet-4'
-
-  ensemble?: {
-    enabled: boolean
-    models: string[]  // ['gpt-4', 'gemini-pro']
-    aggregation: 'mean' | 'median'
-    requireConsensus: boolean
-    consensusThreshold: number  // e.g., 0.3 (max std dev before flagging)
-  }
-
-  temperature: number
-  requireChainOfThought: boolean
-}
-
-// Ensemble result with confidence metrics
-export interface EnsembleResult {
-  finalScore: number | string  // number for continuous, string for categorical
-  individualScores: JudgeScore[]
-  agreement: number  // 0-1, higher = more agreement
-  flaggedForReview: boolean
-  confidenceInterval?: [number, number]  // For continuous only
-  consensusCategory?: string  // For categorical - majority vote
 }

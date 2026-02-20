@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm'
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { evalSetId, query, expectedAnswer, context } = body
+    const { evalSetId, query, evalGuidance, context, fields } = body
 
     if (!evalSetId || !query) {
       return NextResponse.json(
@@ -25,8 +25,9 @@ export async function POST(request: Request) {
       id,
       evalSetId,
       query,
-      expectedAnswer: expectedAnswer || null,
+      evalGuidance: evalGuidance || null,
       context: context || null,
+      metadata: fields ? JSON.stringify({ fields }) : null,
       createdAt: new Date(),
     }).returning()
 
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json()
-    const { id, query, expectedAnswer, context } = body
+    const { id, query, evalGuidance, context } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Missing case ID' }, { status: 400 })
@@ -51,7 +52,7 @@ export async function PATCH(request: Request) {
 
     const updates: any = {}
     if (query !== undefined) updates.query = query
-    if (expectedAnswer !== undefined) updates.expectedAnswer = expectedAnswer
+    if (evalGuidance !== undefined) updates.evalGuidance = evalGuidance
     if (context !== undefined) updates.context = context
 
     const updated = await db

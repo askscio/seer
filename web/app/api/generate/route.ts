@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
-import { generateEvalSet } from '../../../../src/lib/generate'
+import { smartGenerate } from '../../../../src/lib/generate-agent'
 import { fetchAgentInfo } from '../../../../src/lib/fetch-agent'
+import { config } from '../../../../src/lib/config'
 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { agentId, count = 5 } = body
+    const { agentId, count = 5, stream = false } = body
 
     if (!agentId) {
       return NextResponse.json(
@@ -14,26 +15,15 @@ export async function POST(request: Request) {
       )
     }
 
-    // Fetch agent schema from Glean API
-    const gleanBackend = process.env.GLEAN_BACKEND
-    const apiKey = process.env.GLEAN_AGENT_API_KEY
-
-    if (!gleanBackend || !apiKey) {
-      return NextResponse.json(
-        { error: 'Glean configuration missing' },
-        { status: 500 }
-      )
-    }
-
     // Fetch agent info (name + description)
     const agentInfo = await fetchAgentInfo(agentId)
 
     // Fetch agent schema
     const schemaResp = await fetch(
-      `${gleanBackend}/rest/api/v1/agents/${agentId}/schemas`,
+      `${config.gleanBackend}/rest/api/v1/agents/${agentId}/schemas`,
       {
         headers: {
-          'Authorization': `Bearer ${apiKey}`
+          'Authorization': `Bearer ${config.gleanApiKey}`
         }
       }
     )
@@ -47,12 +37,51 @@ export async function POST(request: Request) {
 
     const schema = await schemaResp.json()
 
-    // Generate eval set using AI
-    const generated = await generateEvalSet({
+    // SSE streaming mode
+    if (stream) {
+      const encoder = new TextEncoder()
+      const readable = new ReadableStream({
+        async start(controller) {
+          const send = (data: any) => {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+          }
+
+          try {
+            const generated = await smartGenerate({
+              agentId,
+              agentName: agentInfo?.name || `Agent ${agentId.slice(0, 8)}`,
+              agentDescription: agentInfo?.description || '',
+              schema,
+              count,
+              onProgress: (event) => send(event),
+            })
+
+            // Send final result with metadata
+            send({ phase: 'complete', name: generated.name, description: generated.description })
+            controller.close()
+          } catch (error) {
+            send({ phase: 'error', message: error instanceof Error ? error.message : 'Generation failed' })
+            controller.close()
+          }
+        },
+      })
+
+      return new Response(readable, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      })
+    }
+
+    // Non-streaming mode (CLI / legacy)
+    const generated = await smartGenerate({
       agentId,
-      count,
+      agentName: agentInfo?.name || `Agent ${agentId.slice(0, 8)}`,
+      agentDescription: agentInfo?.description || '',
       schema,
-      agentName: agentInfo?.name
+      count,
     })
 
     return NextResponse.json(generated)

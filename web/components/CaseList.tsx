@@ -3,7 +3,7 @@
 interface EvalCase {
   id: string
   query: string
-  expectedAnswer: string | null
+  evalGuidance: string | null
   context: string | null
   createdAt: Date
 }
@@ -37,13 +37,13 @@ export default function CaseList({ cases }: CaseListProps) {
               <p className="text-gray-900 mt-1">{testCase.query}</p>
             </div>
 
-            {testCase.expectedAnswer && (
+            {testCase.evalGuidance && (
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Expected Answer
+                  Eval Guidance
                 </label>
                 <p className="text-gray-700 text-sm mt-1">
-                  {testCase.expectedAnswer}
+                  {testCase.evalGuidance}
                 </p>
               </div>
             )}

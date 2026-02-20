@@ -11,6 +11,14 @@
  */
 
 import { config } from './config'
+import { extractContentWithFallback } from './extract-content'
+
+export type GenerateProgressEvent =
+  | { phase: 'schema'; message: string }
+  | { phase: 'inputs'; message: string }
+  | { phase: 'guidance'; message: string; current: number; total: number }
+  | { phase: 'case'; case: SmartGeneratedCase; current: number; total: number }
+  | { phase: 'done'; message: string }
 
 export interface SmartGenerateRequest {
   agentId: string
@@ -18,12 +26,13 @@ export interface SmartGenerateRequest {
   agentDescription: string
   schema: any
   count: number
+  onProgress?: (event: GenerateProgressEvent) => void
 }
 
 export interface SmartGeneratedCase {
   input: Record<string, string>
   query: string
-  expectedAnswer: string
+  evalGuidance: string
 }
 
 export interface SmartGeneratedEvalSet {
@@ -59,44 +68,39 @@ async function askAgent(query: string): Promise<string> {
   }
 
   const data = await resp.json() as any
-  let text = ''
-  for (const msg of data.messages ?? []) {
-    if (msg.author === 'GLEAN_AI' && msg.messageType === 'CONTENT') {
-      for (const f of msg.fragments ?? []) {
-        if (f.text) text += f.text
-      }
-    }
-  }
-  return text
+  return extractContentWithFallback(data)
 }
 
 /**
  * Generate a grounded eval set
  */
 export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGeneratedEvalSet> {
-  const { agentId, agentName, agentDescription, schema, count } = req
+  const { agentId, agentName, agentDescription, schema, count, onProgress } = req
   const inputSchema = schema.input_schema || {}
   const inputFields = Object.keys(inputSchema)
   const hasFormInputs = inputFields.length > 0
 
   console.log(`\n🤖 Smart generation for "${agentName}"`)
   console.log(`   Schema: ${hasFormInputs ? inputFields.join(', ') : 'chat-style'}`)
+  onProgress?.({ phase: 'schema', message: `Reading agent schema for "${agentName}"` })
 
   // Step 1: Find realistic input values using company tools
   console.log(`\n1️⃣  Finding realistic inputs...`)
+  onProgress?.({ phase: 'inputs', message: 'Finding realistic inputs with Glean...' })
   const candidateInputs = await findRealisticInputs(
     agentName, agentDescription, inputFields, count
   )
   console.log(`   Found ${candidateInputs.length} candidates`)
 
-  // Step 2: For each input, generate grounded expected output
-  console.log(`\n2️⃣  Generating expected outputs...`)
+  // Step 2: For each input, generate grounded eval guidance
+  console.log(`\n2️⃣  Generating eval guidance...`)
   const cases: SmartGeneratedCase[] = []
 
   for (let i = 0; i < candidateInputs.length; i++) {
     const input = candidateInputs[i]
     const displayVal = Object.values(input)[0] || ''
     console.log(`   [${i + 1}/${candidateInputs.length}] ${displayVal}`)
+    onProgress?.({ phase: 'guidance', message: `Generating guidance for "${displayVal}"...`, current: i + 1, total: candidateInputs.length })
 
     const expected = await generateExpectedOutput(agentName, agentDescription, input)
 
@@ -104,8 +108,12 @@ export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGen
       ? Object.values(input)[0] || ''  // For single-field forms, just the value
       : input.query || Object.values(input)[0] || ''
 
-    cases.push({ input, query, expectedAnswer: expected })
+    const newCase: SmartGeneratedCase = { input, query, evalGuidance: expected }
+    cases.push(newCase)
+    onProgress?.({ phase: 'case', case: newCase, current: i + 1, total: candidateInputs.length })
   }
+
+  onProgress?.({ phase: 'done', message: `Generated ${cases.length} test cases` })
 
   return {
     name: agentName,
@@ -115,7 +123,9 @@ export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGen
 }
 
 /**
- * Step 1: Find realistic input values using ADVANCED agent with company tools
+ * Step 1: Find realistic input values using ADVANCED agent with company tools.
+ * For single-field agents, returns a list of values for that field.
+ * For multi-field agents, returns structured objects with values for ALL fields.
  */
 async function findRealisticInputs(
   agentName: string,
@@ -123,10 +133,38 @@ async function findRealisticInputs(
   inputFields: string[],
   count: number
 ): Promise<Record<string, string>[]> {
-  const fieldName = inputFields[0] || 'query'
+  if (inputFields.length === 0) {
+    // Chat-style: generate natural language queries
+    const text = await askAgent(
+      `I'm testing a Glean agent called "${agentName}".
+Description: ${agentDescription}
 
-  const text = await askAgent(
-    `I'm testing a Glean agent called "${agentName}".
+Generate exactly ${count} realistic, diverse questions that someone at this company would ask this agent.
+
+Include a mix of:
+- Common questions that should produce good results
+- At least 1 edge case (vague or ambiguous query)
+- At least 1 boundary case (off-topic or unanswerable)
+
+Return ONLY a plain numbered list. No explanations. Just:
+1. Question one
+2. Question two
+...`
+    )
+
+    const lines = text.split('\n')
+      .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())
+      .filter(l => l.length > 0 && !l.startsWith('---'))
+      .slice(0, count)
+
+    return lines.map(val => ({ query: val }))
+  }
+
+  if (inputFields.length === 1) {
+    // Single-field: generate values for that field
+    const fieldName = inputFields[0]
+    const text = await askAgent(
+      `I'm testing a Glean agent called "${agentName}".
 Description: ${agentDescription}
 
 It takes a form input field called "${fieldName}".
@@ -142,15 +180,53 @@ Return ONLY a plain numbered list. No explanations, no markdown formatting, no b
 1. Value one
 2. Value two
 ...`
+    )
+
+    const lines = text.split('\n')
+      .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())
+      .filter(l => l.length > 0 && !l.startsWith('---'))
+      .slice(0, count)
+
+    return lines.map(val => ({ [fieldName]: val }))
+  }
+
+  // Multi-field: generate structured input combinations
+  const fieldList = inputFields.map(f => `"${f}"`).join(', ')
+  const text = await askAgent(
+    `I'm testing a Glean agent called "${agentName}".
+Description: ${agentDescription}
+
+It takes these form inputs: ${fieldList}
+
+Search our company data and give me exactly ${count} realistic test input combinations. Each combination should have a value for every field.
+
+Include a mix of:
+- Well-known values that should produce good results
+- At least 1 edge case (misspelling, unusual casing)
+- At least 1 case where optional fields are left blank
+
+Return each combination on its own line using this EXACT format (pipe-separated):
+${inputFields.join(' | ')}
+
+Example format:
+value1 | value2 | value3
+
+Return ONLY the ${count} lines of values. No headers, no numbering, no explanations.`
   )
 
-  // Parse numbered list
   const lines = text.split('\n')
-    .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())  // Strip "1. " or "1) " prefix
-    .filter(l => l.length > 0 && !l.startsWith('---'))
+    .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())
+    .filter(l => l.length > 0 && !l.startsWith('---') && l.includes('|'))
     .slice(0, count)
 
-  return lines.map(val => ({ [fieldName]: val }))
+  return lines.map(line => {
+    const values = line.split('|').map(v => v.trim())
+    const result: Record<string, string> = {}
+    inputFields.forEach((field, i) => {
+      result[field] = values[i] || ''
+    })
+    return result
+  })
 }
 
 /**

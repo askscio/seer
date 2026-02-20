@@ -8,7 +8,7 @@ import { Markdown } from './Markdown'
 interface EvalCase {
   id: string
   query: string
-  expectedAnswer: string | null
+  evalGuidance: string | null
   context: string | null
 }
 
@@ -22,12 +22,12 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
   const { showToast } = useToast()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editQuery, setEditQuery] = useState('')
-  const [editExpected, setEditExpected] = useState('')
+  const [editGuidance, setEditGuidance] = useState('')
 
   const handleEdit = (testCase: EvalCase) => {
     setEditingId(testCase.id)
     setEditQuery(testCase.query)
-    setEditExpected(testCase.expectedAnswer || '')
+    setEditGuidance(testCase.evalGuidance || '')
   }
 
   const handleSave = async (id: string) => {
@@ -38,7 +38,7 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
         body: JSON.stringify({
           id,
           query: editQuery,
-          expectedAnswer: editExpected || null,
+          evalGuidance: editGuidance || null,
         }),
       })
 
@@ -81,7 +81,7 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
               Input
             </th>
             <th className="text-left px-4 py-3 text-xs font-medium text-cement uppercase tracking-wide w-[40%]">
-              Expected Output
+              Eval Guidance
             </th>
             <th className="text-right px-4 py-3 text-xs font-medium text-cement uppercase tracking-wide w-24">
               Actions
@@ -112,14 +112,14 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
               <td className="px-4 py-3">
                 {editingId === testCase.id ? (
                   <textarea
-                    value={editExpected}
-                    onChange={(e) => setEditExpected(e.target.value)}
+                    value={editGuidance}
+                    onChange={(e) => setEditGuidance(e.target.value)}
                     className="w-full px-2 py-1 border border-glean-blue rounded text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
                     rows={3}
-                    placeholder="Optional expected output..."
+                    placeholder="What themes should the response cover?"
                   />
-                ) : testCase.expectedAnswer ? (
-                  <Markdown content={testCase.expectedAnswer} className="text-gray-700" />
+                ) : testCase.evalGuidance ? (
+                  <Markdown content={testCase.evalGuidance} className="text-gray-700" />
                 ) : (
                   <span className="text-sm text-gray-400 italic">Not specified</span>
                 )}

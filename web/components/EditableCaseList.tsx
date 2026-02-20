@@ -7,7 +7,7 @@ import CaseEditor from './CaseEditor'
 interface EvalCase {
   id: string
   query: string
-  expectedAnswer: string | null
+  evalGuidance: string | null
   context: string | null
   createdAt: Date
 }
@@ -28,7 +28,7 @@ export default function EditableCaseList({ cases: initialCases, evalSetId }: Edi
       body: JSON.stringify({
         id: updatedCase.id,
         query: updatedCase.query,
-        expectedAnswer: updatedCase.expectedAnswer,
+        evalGuidance: updatedCase.evalGuidance,
         context: updatedCase.context,
       }),
     })

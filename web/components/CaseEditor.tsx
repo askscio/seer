@@ -5,7 +5,7 @@ import { useState } from 'react'
 interface EvalCase {
   id: string
   query: string
-  expectedAnswer: string | null
+  evalGuidance: string | null
   context: string | null
 }
 
@@ -21,7 +21,7 @@ export default function CaseEditor({ testCase, index, onSave, onDelete }: CaseEd
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [query, setQuery] = useState(testCase.query)
-  const [expectedAnswer, setExpectedAnswer] = useState(testCase.expectedAnswer || '')
+  const [evalGuidance, setEvalGuidance] = useState(testCase.evalGuidance || '')
   const [context, setContext] = useState(testCase.context || '')
 
   const handleSave = async () => {
@@ -30,7 +30,7 @@ export default function CaseEditor({ testCase, index, onSave, onDelete }: CaseEd
       await onSave({
         ...testCase,
         query,
-        expectedAnswer: expectedAnswer || null,
+        evalGuidance: evalGuidance || null,
         context: context || null,
       })
       setEditing(false)
@@ -58,7 +58,7 @@ export default function CaseEditor({ testCase, index, onSave, onDelete }: CaseEd
 
   const handleCancel = () => {
     setQuery(testCase.query)
-    setExpectedAnswer(testCase.expectedAnswer || '')
+    setEvalGuidance(testCase.evalGuidance || '')
     setContext(testCase.context || '')
     setEditing(false)
   }
@@ -95,13 +95,13 @@ export default function CaseEditor({ testCase, index, onSave, onDelete }: CaseEd
             <p className="text-gray-900 mt-1">{testCase.query}</p>
           </div>
 
-          {testCase.expectedAnswer && (
+          {testCase.evalGuidance && (
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                Expected Answer
+                Eval Guidance
               </label>
               <p className="text-gray-700 text-sm mt-1">
-                {testCase.expectedAnswer}
+                {testCase.evalGuidance}
               </p>
             </div>
           )}
@@ -143,14 +143,14 @@ export default function CaseEditor({ testCase, index, onSave, onDelete }: CaseEd
 
         <div>
           <label className="text-xs font-semibold text-gray-700 uppercase tracking-wide block mb-1">
-            Expected Answer (Optional)
+            Eval Guidance (Optional)
           </label>
           <textarea
-            value={expectedAnswer}
-            onChange={(e) => setExpectedAnswer(e.target.value)}
+            value={evalGuidance}
+            onChange={(e) => setEvalGuidance(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
             rows={2}
-            placeholder="What should the agent return?"
+            placeholder="What themes should the response cover?"
           />
         </div>
 

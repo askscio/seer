@@ -6,11 +6,11 @@
 import { nanoid } from 'nanoid'
 
 /**
- * Generate a CLI-safe ID that never starts with a dash
+ * Generate a CLI-safe ID that never starts with a dash.
+ * Uses retry loop to maintain consistent length (21 chars).
  */
 export function generateId(prefix?: string): string {
-  const id = nanoid()
-  const safeId = id.startsWith('-') ? id.slice(1) : id
-
-  return prefix ? `${prefix}_${safeId}` : safeId
+  let id = nanoid()
+  while (id.startsWith('-')) id = nanoid()
+  return prefix ? `${prefix}_${id}` : id
 }
