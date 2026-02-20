@@ -264,7 +264,7 @@ The evaluation framework is implemented across three files:
 ### Judge Call Routing
 
 ```
-judgeResponse(criteria, query, response, expectedAnswer, reasoningChain)
+judgeResponse(criteria, query, response, evalGuidance, reasoningChain)
   │
   ├─ Coverage criteria requested?
   │   └─ Call 1: DEFAULT + Opus 4.6 (query + expected + response)

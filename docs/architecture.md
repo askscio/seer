@@ -69,7 +69,7 @@ Generates grounded eval sets using Glean's ADVANCED toolkit agent.
 - **Uses raw fetch** (SDK doesn't support ADVANCED mode yet)
 - **Phase 1:** Ask agent to find realistic input values from company data (CRM, success plans)
 - **Phase 2:** For each input, ask agent what a good output should look like based on available documents
-- **Output:** Structured `{ input, query, expectedAnswer }` cases
+- **Output:** Structured `{ input, query, evalGuidance }` cases
 
 ### Judge (`src/lib/judge.ts`)
 

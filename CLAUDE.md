@@ -29,8 +29,8 @@ Eval Engine
 │   └── Finds real inputs, generates grounded eval guidance
 ├── Judge              POST /rest/api/v1/chat (Opus 4.6 via modelSetId)
 │   ├── Call 1: Coverage    — reference-based, scores against eval guidance
-│   ├── Call 2: Faithfulness — reference-free, scores against agent's own retrieval
-│   └── Call 3: Factuality  — search-verified, ADVANCED agent verifies claims
+│   ├── Call 2: Faithfulness — source-grounded, reads agent's source docs via search
+│   └── Call 3: Factuality  — search-verified, ADVANCED agent verifies claims broadly
 └── Metrics            Latency (client-side), tool call count
 ```
 
@@ -54,17 +54,18 @@ Eval Engine
 
 7 dimensions organized by judge call type:
 
-| Dimension | Type | Judge Call | Reference |
-|-----------|------|-----------|-----------|
-| Topical Coverage | Categorical | Coverage | Eval guidance (themes) |
-| Response Quality | Categorical | Coverage | Eval guidance |
-| Groundedness | Categorical | Faithfulness | Agent's reasoning chain |
-| Hallucination Risk | Binary | Faithfulness | Agent's reasoning chain |
-| Factual Accuracy | Categorical | Factuality | Live company search |
-| Latency | Metric | Direct | Client timer |
-| Tool Calls | Metric | Direct | Execution data |
+| Dimension | Type | Judge Call | Reference | Tools |
+|-----------|------|-----------|-----------|-------|
+| Topical Coverage | Categorical | Coverage | Eval guidance (themes) | None |
+| Response Quality | Categorical | Coverage | Eval guidance | None |
+| Groundedness | Categorical | Faithfulness | Agent's source documents | Company search (reads docs) |
+| Hallucination Risk | Categorical | Faithfulness | Agent's source documents | Company search (reads docs) |
+| Factual Accuracy | Categorical | Factuality | Live company search | Company search (broad) |
+| Latency | Metric | Direct | Client timer | None |
+| Tool Calls | Metric | Direct | Execution data | None |
 
-Categorical scale: `full` (10) → `substantial` (7.5) → `partial` (5) → `minimal` (2.5) → `failure` (0)
+Quality scale: `full` (10) → `substantial` (7.5) → `partial` (5) → `minimal` (2.5) → `failure` (0)
+Hallucination scale: `low` (10) → `medium` (5) → `high` (0)
 
 ## File Organization
 
@@ -90,7 +91,8 @@ src/
 │   └── defaults.ts         # 7 dimension definitions with categorical rubrics
 web/
 ├── app/                    # Next.js pages (dashboard, sets, runs, settings)
-├── components/             # UI (ResultsTable, CaseTable, Markdown, Tooltip, RunEvalModal)
+├── components/             # UI (ResultsTable, CaseTable, EvalConfigSection, JudgeMethodology, RunProgress, Tooltip)
+├── lib/dimensions.ts       # Shared dimension definitions (tooltips, context, descriptions)
 ├── lib/db.ts               # Shared SQLite access
 docs/
 ├── evaluation-framework.md # Core eval philosophy and dimension design
@@ -99,6 +101,7 @@ docs/
 ├── resources.md            # Research references and API docs
 ├── issues.md               # Bug tracking and known limitations
 ├── frontend-design-spec.md # Glean-branded UI design spec
+├── ai-api-calls.md         # Every AI API call mapped (endpoints, prompts, models)
 ├── TRACE_API_LIMITATIONS.md
 ├── guide-petri-judge-patterns.md
 ├── guide-judge-best-practices.md
@@ -110,7 +113,7 @@ docs/
 
 1. **Categorical over continuous** — SJT research shows 15% reliability gain (Cavanagh, 2026)
 2. **Three separate judge calls** — each dimension needs different reference material (eval guidance vs reasoning chain vs live search)
-3. **Reference-free faithfulness** — immune to data staleness; checks response against agent's own retrieved docs
+3. **Source-grounded faithfulness** — immune to data staleness; reads agent's actual source documents via search tools to verify claims
 4. **Raw fetch over SDK** — SDK doesn't support ADVANCED agent mode or modelSetId; raw fetch bypasses Zod validation
 5. **CONTENT vs UPDATE messages** — Final answers are `messageType: "CONTENT"`, reasoning is `messageType: "UPDATE"`
 6. **Multi-judge with majority vote** — cross-family panels reduce model-specific biases (Verga et al., 2024)
