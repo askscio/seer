@@ -362,7 +362,7 @@ program
   .command('run <set-id>')
   .description('Run evaluation on an eval set')
   .option('--criteria <list>', 'Comma-separated criteria IDs', 'topical_coverage,response_quality,groundedness,hallucination_risk')
-  .option('--deep', 'Include factual accuracy verification (uses company search)', false)
+  .option('--deep', 'Include factual accuracy verification (adds 4th judge call with company search)', false)
   .option('--multi-judge', 'Run with multiple judge models (Opus 4.6 + GPT-5)', false)
   .action(async (setId, opts) => {
     try {
@@ -448,12 +448,14 @@ program
           )
 
           // 3. Calculate overall score (weighted average, converting categories to numeric)
+          // Skipped dimensions are excluded from aggregation (no weight contributed)
           let totalWeightedScore = 0
           let totalWeight = 0
 
           for (const score of scores) {
             const criterion = getCriterion(score.criterionId)
             if (!criterion || criterion.scoreType === 'metric') continue
+            if (score.scoreCategory === 'skipped') continue
 
             let numericValue: number | undefined
             if (score.scoreValue !== undefined) {

@@ -16,27 +16,27 @@ type EvalMode = 'quick' | 'deep' | 'full' | 'custom'
 const EVAL_MODES = {
   quick: {
     label: 'Quick',
-    description: 'Coverage + Faithfulness',
-    detail: 'Checks topical coverage against eval guidance, plus groundedness against what the agent actually retrieved.',
+    description: 'Coverage + Quality + Faithfulness',
+    detail: 'Checks topical coverage against eval guidance, response quality (standalone), plus groundedness against pre-fetched source documents.',
     criteria: ['topical_coverage', 'response_quality', 'groundedness', 'hallucination_risk'],
-    callsPerJudge: 2,
-    estSeconds: 30,
+    callsPerJudge: 3,
+    estSeconds: 35,
   },
   deep: {
     label: 'Deep',
     description: 'Quick + Factual Verification',
     detail: 'Everything in Quick, plus an independent factuality check where the judge searches company data to verify specific claims.',
     criteria: ['topical_coverage', 'response_quality', 'groundedness', 'hallucination_risk', 'factual_accuracy'],
-    callsPerJudge: 3,
-    estSeconds: 45,
+    callsPerJudge: 4,
+    estSeconds: 50,
   },
   full: {
     label: 'Full',
     description: 'All dimensions + metrics',
-    detail: 'Runs the complete evaluation suite: coverage, faithfulness, factuality, plus latency and tool call metrics.',
+    detail: 'Runs the complete evaluation suite: coverage, quality, faithfulness, factuality, plus latency and tool call metrics.',
     criteria: ['topical_coverage', 'response_quality', 'groundedness', 'hallucination_risk', 'factual_accuracy', 'latency', 'tool_call_count'],
-    callsPerJudge: 3,
-    estSeconds: 45,
+    callsPerJudge: 4,
+    estSeconds: 50,
   },
   custom: {
     label: 'Custom',
@@ -68,6 +68,7 @@ const JUDGE_MODELS = [
 
 const GROUP_LABELS: Record<string, string> = {
   coverage: 'Coverage (reference-based)',
+  quality: 'Quality (standalone)',
   faithfulness: 'Faithfulness (source-grounded)',
   factuality: 'Factuality (search-verified)',
   metric: 'Direct Metrics',
@@ -91,10 +92,12 @@ export default function EvalConfigSection({ evalSetId, hasCases }: EvalConfigSec
   // Compute actual judge calls per case (by call type, not by dimension)
   const computeCallsPerJudge = (criteria: string[]) => {
     let calls = 0
-    const hasCoverage = criteria.some(c => ['topical_coverage', 'response_quality'].includes(c))
+    const hasCoverage = criteria.some(c => ['topical_coverage'].includes(c))
+    const hasQuality = criteria.some(c => ['response_quality'].includes(c))
     const hasFaithfulness = criteria.some(c => ['groundedness', 'hallucination_risk'].includes(c))
     const hasFactuality = criteria.includes('factual_accuracy')
     if (hasCoverage) calls++
+    if (hasQuality) calls++
     if (hasFaithfulness) calls++
     if (hasFactuality) calls++
     return calls
@@ -168,7 +171,7 @@ export default function EvalConfigSection({ evalSetId, hasCases }: EvalConfigSec
         <div>
           <label className="text-xs font-medium text-cement uppercase tracking-wide block mb-3">
             Evaluation Mode
-            <InfoIcon text="Each mode groups criteria into independent judge calls by type. Coverage call sees query + eval guidance. Faithfulness call sees query + agent trace and uses search tools to read the actual source documents. Factuality call sees query + response and independently searches all company data. Calls run in sequence per case, but each call is independent — they don't share context or influence each other's scores." wide />
+            <InfoIcon text="Each mode groups criteria into independent judge calls by type. Coverage call sees query + eval guidance. Quality call sees query + response only (isolated from eval guidance). Faithfulness call sees query + agent trace + pre-fetched document content. Factuality call sees query + response and independently searches all company data. Calls run in sequence per case, but each call is independent — they don't share context or influence each other's scores." wide />
           </label>
           <div className="grid grid-cols-2 gap-3">
             {(Object.entries(EVAL_MODES) as [EvalMode, typeof EVAL_MODES.quick][]).map(([key, m]) => (

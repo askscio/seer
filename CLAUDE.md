@@ -5,7 +5,7 @@
 ## What This Is
 
 Seer evaluates AI agents built in Glean's Agent Builder:
-- **Three-call judge architecture** — coverage (reference-based), faithfulness (reference-free), factuality (search-verified)
+- **Four-call judge architecture** — coverage, quality (standalone), faithfulness (pre-fetched docs), factuality (search-verified)
 - **Categorical scoring** — full/substantial/partial/minimal/failure (15% more reliable than 0-10 scales, per SJT research)
 - **Multi-judge ensemble** — Opus 4.6, GPT-5, Gemini with majority vote aggregation
 - **Smart eval generation** — ADVANCED toolkit agent with company search finds real inputs from CRM/docs
@@ -27,10 +27,12 @@ Eval Engine
 │   └── Returns: response, traceId, toolCalls, reasoningChain
 ├── Smart Generator    POST /rest/api/v1/chat (ADVANCED + company tools)
 │   └── Finds real inputs, generates grounded eval guidance
+├── Source Doc Fetch   POST /rest/api/v1/search (pre-fetch for faithfulness)
 ├── Judge              POST /rest/api/v1/chat (Opus 4.6 via modelSetId)
-│   ├── Call 1: Coverage    — reference-based, scores against eval guidance
-│   ├── Call 2: Faithfulness — source-grounded, reads agent's source docs via search
-│   └── Call 3: Factuality  — search-verified, ADVANCED agent verifies claims broadly
+│   ├── Call 1: Coverage      — reference-based, scores against eval guidance themes
+│   ├── Call 2: Quality       — standalone, query + response only (no anchoring bias)
+│   ├── Call 3: Faithfulness  — source-grounded, pre-fetched doc content injected
+│   └── Call 4: Factuality    — search-verified, ADVANCED agent verifies claims broadly
 └── Metrics            Latency (client-side), tool call count
 ```
 
@@ -57,9 +59,9 @@ Eval Engine
 | Dimension | Type | Judge Call | Reference | Tools |
 |-----------|------|-----------|-----------|-------|
 | Topical Coverage | Categorical | Coverage | Eval guidance (themes) | None |
-| Response Quality | Categorical | Coverage | Eval guidance | None |
-| Groundedness | Categorical | Faithfulness | Agent's source documents | Company search (reads docs) |
-| Hallucination Risk | Categorical | Faithfulness | Agent's source documents | Company search (reads docs) |
+| Response Quality | Categorical | Quality | Query + response only | None |
+| Groundedness | Categorical | Faithfulness | Pre-fetched source docs | None |
+| Hallucination Risk | Categorical | Faithfulness | Pre-fetched source docs | None |
 | Factual Accuracy | Categorical | Factuality | Live company search | Company search (broad) |
 | Latency | Metric | Direct | Client timer | None |
 | Tool Calls | Metric | Direct | Execution data | None |
@@ -84,7 +86,8 @@ src/
 │   ├── generate-agent.ts   # Smart generation (ADVANCED agent + company tools)
 │   ├── generate.ts         # Legacy generation (Glean Chat SDK, unused)
 │   ├── fetch-agent.ts      # Agent info fetcher
-│   ├── judge.ts            # Three-call judge with multi-model ensemble
+│   ├── fetch-docs.ts       # Source document content retrieval for faithfulness
+│   ├── judge.ts            # Four-call judge with multi-model ensemble
 │   ├── metrics.ts          # Direct metric extraction
 │   └── id.ts               # ID generation (nanoid)
 ├── criteria/
@@ -112,12 +115,14 @@ docs/
 ## Key Design Decisions
 
 1. **Categorical over continuous** — SJT research shows 15% reliability gain (Cavanagh, 2026)
-2. **Three separate judge calls** — each dimension needs different reference material (eval guidance vs reasoning chain vs live search)
-3. **Source-grounded faithfulness** — immune to data staleness; reads agent's actual source documents via search tools to verify claims
-4. **Raw fetch over SDK** — SDK doesn't support ADVANCED agent mode or modelSetId; raw fetch bypasses Zod validation
-5. **CONTENT vs UPDATE messages** — Final answers are `messageType: "CONTENT"`, reasoning is `messageType: "UPDATE"`
-6. **Multi-judge with majority vote** — cross-family panels reduce model-specific biases (Verga et al., 2024)
-7. **Eval guidance, not expected answers** — themes are stable over time even as facts change (FreshQA, Vu et al., 2023)
+2. **Four separate judge calls** — each dimension gets minimum viable context (no contamination between dimensions)
+3. **Quality isolated from coverage** — eval guidance excluded from quality call to prevent anchoring bias
+4. **Pre-fetched faithfulness** — source doc content fetched via Glean search API and injected; enables DEFAULT agent with modelSetId (full model control)
+5. **Skip, don't guess** — coverage skipped when no eval guidance (themes undefined without it); returns explicit 'skipped' status
+6. **Raw fetch over SDK** — SDK doesn't support ADVANCED agent mode or modelSetId; raw fetch bypasses Zod validation
+7. **CONTENT vs UPDATE messages** — Final answers are `messageType: "CONTENT"`, reasoning is `messageType: "UPDATE"`
+8. **Multi-judge with majority vote** — cross-family panels reduce model-specific biases (Verga et al., 2024)
+9. **Eval guidance, not expected answers** — themes are stable over time even as facts change (FreshQA, Vu et al., 2023)
 
 ## Usage
 
@@ -125,10 +130,10 @@ docs/
 # Generate eval set (finds real inputs from company data)
 bun run src/cli.ts generate <agent-id> --count 5
 
-# Quick eval (coverage + faithfulness, 2 judge calls/case)
+# Quick eval (coverage + quality + faithfulness, 3 judge calls/case)
 bun run src/cli.ts run <set-id>
 
-# Deep eval (+ factuality verification with company search)
+# Deep eval (+ factuality verification with company search, 4 judge calls/case)
 bun run src/cli.ts run <set-id> --deep
 
 # Multi-judge (Opus 4.6 + GPT-5)
@@ -153,4 +158,4 @@ cd web && bun run dev
 | Rubric RL (Wolfe, 2025) | Instance-specific rubrics (planned), implicit aggregation |
 | Verga et al. (2024) | Cross-family judge panels, ensemble reliability |
 
--- Axon | 2026-02-18
+-- Axon | 2026-02-20

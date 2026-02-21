@@ -11,11 +11,13 @@ Every external AI/API call Seer makes, documented with endpoint, payload, prompt
 | 1 | Agent Execution | `glean.ts` | `POST runworkflow` | Target agent | Agent's configured tools | `query` |
 | 2 | Generate Inputs | `generate-agent.ts` | `POST chat` | ADVANCED (Gemini) | Company search, CRM | `agentName`, `agentDescription`, `fieldName`, `count` |
 | 3 | Generate Guidance | `generate-agent.ts` | `POST chat` | ADVANCED (Gemini) | Company search, CRM | `agentName`, `agentDescription`, `input` |
-| 4 | Coverage Judge | `judge.ts` | `POST chat` | OPUS_4_6_VERTEX | None | `criteriaBlock`, `query`, `evalGuidance`, `response` |
-| 5 | Faithfulness Judge | `judge.ts` | `POST chat` | OPUS_4_6_VERTEX | None | `criteriaBlock`, `query`, `reasoningChain`, `response` |
-| 6 | Factuality Judge | `judge.ts` | `POST chat` | ADVANCED + modelSetId | Company search | `criterion`, `query`, `agentSources`, `response` |
-| 7 | Schema Fetch | `glean.ts` | `GET agents/{id}/schemas` | N/A | N/A | `agentId` |
-| 8 | Agent Info | `fetch-agent.ts` | `GET agents/{id}` | N/A | N/A | `agentId` |
+| 4 | Source Doc Retrieval | `fetch-docs.ts` | `POST search` | N/A | N/A | `documentTitles` |
+| 5 | Coverage Judge | `judge.ts` | `POST chat` | DEFAULT + modelSetId | None | `criteriaBlock`, `query`, `evalGuidance`, `response` |
+| 6 | Quality Judge | `judge.ts` | `POST chat` | DEFAULT + modelSetId | None | `criteriaBlock`, `query`, `response` |
+| 7 | Faithfulness Judge | `judge.ts` | `POST chat` | DEFAULT + modelSetId | None | `criteriaBlock`, `query`, `docContent`, `reasoningChain`, `response` |
+| 8 | Factuality Judge | `judge.ts` | `POST chat` | ADVANCED + modelSetId | Company search | `criterion`, `query`, `agentSources`, `response` |
+| 9 | Schema Fetch | `glean.ts` | `GET agents/{id}/schemas` | N/A | N/A | `agentId` |
+| 10 | Agent Info | `fetch-agent.ts` | `GET agents/{id}` | N/A | N/A | `agentId` |
 
 ---
 
@@ -157,7 +159,42 @@ Be specific and concrete. No generic advice.
 
 ---
 
-## Call 4: Coverage Judge
+## Call 4: Source Document Retrieval
+
+**File:** `src/lib/fetch-docs.ts` — `fetchSourceDocContent()`
+
+**Endpoint:** `POST {GLEAN_BACKEND}/rest/api/v1/search`
+
+**Auth:** `Authorization: Bearer {GLEAN_API_KEY}`
+
+**Payload (per document):**
+```json
+{
+  "query": "{document title}",
+  "pageSize": 1,
+  "requestOptions": { "facetFilters": [] }
+}
+```
+
+**Purpose:** Fetches actual document content for source documents identified in the agent's reasoning chain. Called between agent execution and faithfulness judging so the judge receives real content instead of just titles.
+
+**How it works:**
+1. Extract unique document titles from `reasoningChain[].documentsRead`
+2. Cap at 10 documents (focused context > exhaustive noise)
+3. For each title, call search API with `pageSize: 1` to get the top match
+4. Extract text snippets from the top result
+5. Run all searches in parallel via `Promise.all()`
+6. Return `{ title, content }[]`
+
+**Failure handling:** If a search returns no results or errors, returns `{ title, content: '[Content not retrievable]' }`. The faithfulness judge can still evaluate — it notes which sources it couldn't verify.
+
+**Dynamic fields:** `documentTitles` — extracted from reasoning chain
+
+**Return shape:** `SourceDoc[]` — `{ title: string, content: string }`
+
+---
+
+## Call 5: Coverage Judge
 
 **File:** `src/lib/judge.ts` — `judgeCoverageBatch()`
 
@@ -173,6 +210,8 @@ Be specific and concrete. No generic advice.
 
 **Additional settings:** `saveChat: false`, `timeoutMillis: 120000`
 
+**Prerequisite:** Eval guidance required. Skipped if no eval guidance — returns `scoreCategory: 'skipped'` with reasoning.
+
 **Prompt template:**
 ```
 You are an expert evaluator assessing an AI agent's response.
@@ -185,7 +224,7 @@ You are an expert evaluator assessing an AI agent's response.
 {query}
 </query>
 
-<eval_guidance>          ← only if evalGuidance is provided
+<eval_guidance>
 {evalGuidance}
 </eval_guidance>
 
@@ -209,9 +248,9 @@ The eval guidance describes ONE valid answer, not THE only valid answer. Do not 
 ```
 
 **Dynamic fields:**
-- `criteriaBlock` — rubric text for each coverage criterion (topical_coverage, response_quality)
+- `criteriaBlock` — rubric text for topical_coverage
 - `query` — from eval case
-- `evalGuidance` — from eval case (optional)
+- `evalGuidance` — from eval case (required — call is skipped without it)
 - `response` — agent's actual response
 - `scoreFormat` — XML tags for each criterion's score output
 
@@ -221,7 +260,63 @@ The eval guidance describes ONE valid answer, not THE only valid answer. Do not 
 
 ---
 
-## Call 5: Faithfulness Judge
+## Call 6: Quality Judge
+
+**File:** `src/lib/judge.ts` — `judgeQualityBatch()`
+
+**Endpoint:** `POST {GLEAN_BACKEND}/rest/api/v1/chat`
+
+**agentConfig:**
+```json
+{
+  "agent": "DEFAULT",
+  "modelSetId": "OPUS_4_6_VERTEX"
+}
+```
+
+**Additional settings:** `saveChat: false`, `timeoutMillis: 120000`
+
+**Prompt template:**
+```
+You are an expert evaluator assessing the quality of an AI agent's response. You are evaluating ONLY the structure, clarity, and presentation — not factual correctness or topic coverage.
+
+{criteriaBlock}
+
+=== MATERIAL ===
+
+<query>
+{query}
+</query>
+
+<actual_response>
+{response}
+</actual_response>
+
+=== INSTRUCTIONS ===
+
+1. Evaluate the response's structure, conciseness, and actionability
+2. Check formatting appropriateness for the query type
+3. Assess information density — concise and specific is better than verbose and padded
+4. Assign a category using the rubric
+
+Do NOT evaluate whether the response covers the right topics or contains correct facts. Focus purely on how well the information is presented.
+
+{scoreFormat}
+```
+
+**Dynamic fields:**
+- `criteriaBlock` — rubric text for response_quality
+- `query` — from eval case
+- `response` — agent's actual response (no eval guidance — prevents anchoring bias)
+- `scoreFormat` — XML tags per criterion
+
+**Return shape:** XML-structured text. Same parsing as Call 5.
+
+**Key design decision:** Eval guidance is intentionally excluded to prevent anchoring bias. The judge should evaluate "is it well-written?" without knowing "what should be there."
+
+---
+
+## Call 7: Faithfulness Judge
 
 **File:** `src/lib/judge.ts` — `judgeFaithfulnessBatch()`
 
@@ -249,9 +344,15 @@ You are evaluating whether an AI agent's response is faithful to what it actuall
 {query}
 </query>
 
-<reasoning_chain>
+<agent_execution_trace>
 {chainText}
-</reasoning_chain>
+</agent_execution_trace>
+
+<agent_source_documents>
+The following document excerpts were retrieved by the agent during execution. Check whether the response faithfully represents what these documents say.
+
+{docContentBlock}
+</agent_source_documents>
 
 <actual_response>
 {response}
@@ -259,14 +360,16 @@ You are evaluating whether an AI agent's response is faithful to what it actuall
 
 === INSTRUCTIONS ===
 
-1. Identify key claims in the response
-2. Check each against the documents in the reasoning chain
-3. Assign categories using the rubrics
+1. Read the document excerpts provided above
+2. Identify the key claims in the agent's response
+3. For each claim, check whether it is supported by the actual content of the retrieved documents
+4. Flag any claims where the response misrepresents, exaggerates, or fabricates details not in the sources
+5. Assign categories using the rubrics
 
 A response that says "no data found" when no documents were retrieved is CORRECT behavior.
 
 <claim_check>
-- "[claim]": [GROUNDED/UNGROUNDED/HEDGED]
+- "[claim]": [GROUNDED in <source>/UNGROUNDED/HEDGED/MISREPRESENTED from <source>]
 </claim_check>
 
 {scoreFormat}
@@ -276,16 +379,17 @@ A response that says "no data found" when no documents were retrieved is CORRECT
 - `criteriaBlock` — rubric text for faithfulness criteria (groundedness, hallucination_risk)
 - `query` — from eval case
 - `chainText` — formatted reasoning chain (search queries, docs read per step)
+- `docContentBlock` — pre-fetched document content from Call 4 (injected, not searched live)
 - `response` — agent's actual response
 - `scoreFormat` — XML tags per criterion
 
-**Return shape:** XML-structured text. Same parsing as Call 4.
+**Return shape:** XML-structured text. Same parsing as Call 5.
 
-**Note:** The reasoning chain comes from Call 1's execution trace — UPDATE messages containing search queries, document titles/URLs, and action metadata.
+**Key design decision:** Uses `callJudge()` (DEFAULT agent) instead of the previous `callJudgeWithTools()` (ADVANCED agent). Document content is pre-fetched via Call 4 and injected into the prompt, giving us full model control via modelSetId. No search tools needed.
 
 ---
 
-## Call 6: Factuality Judge
+## Call 8: Factuality Judge
 
 **File:** `src/lib/judge.ts` — `judgeFactuality()`
 
@@ -349,13 +453,13 @@ The agent retrieved these documents during execution:
 - `agentSources` — document titles from agent's reasoning chain (max 20)
 - `response` — agent's actual response
 
-**Return shape:** XML-structured text. Same parsing pattern as Calls 4-5.
+**Return shape:** XML-structured text. Same parsing pattern as Calls 5-7.
 
-**Key difference from Calls 4-5:** Uses `callJudgeWithTools()` instead of `callJudge()` — the ADVANCED agent with `enableCompanyTools: true` gives the judge live search access to independently verify claims.
+**Key difference from Calls 5-7:** Uses `callJudgeWithTools()` instead of `callJudge()` — the ADVANCED agent with `enableCompanyTools: true` gives the judge live search access to independently verify claims. This is the only dimension that genuinely needs discovery.
 
 ---
 
-## Call 7: Schema Fetch
+## Call 9: Schema Fetch
 
 **File:** `src/data/glean.ts` — `getAgentSchema()`
 
@@ -379,7 +483,7 @@ The agent retrieved these documents during execution:
 
 ---
 
-## Call 8: Agent Info
+## Call 10: Agent Info
 
 **File:** `src/lib/fetch-agent.ts` — `fetchAgentInfo()`
 
@@ -405,31 +509,37 @@ The agent retrieved these documents during execution:
 
 ## Multi-Judge Flow
 
-When `--multi-judge` is enabled (CLI) or multiple judges selected (Web UI), Calls 4-6 are executed through **all judge models** in `JUDGE_MODELS`, then aggregated:
+When `--multi-judge` is enabled (CLI) or multiple judges selected (Web UI), Calls 5-8 are executed through **all judge models** in `JUDGE_MODELS`, then aggregated:
 
 ```
 runJudgePipeline() is called once per model:
 
 Model 1 (OPUS_4_6_VERTEX)
-├── Call 4: Coverage → scores[]
-├── Call 5: Faithfulness → scores[]
-└── Call 6: Factuality → scores[]
+├── Call 4: Source Doc Retrieval (shared, runs once)
+├── Call 5: Coverage → scores[]
+├── Call 6: Quality → scores[]
+├── Call 7: Faithfulness → scores[]
+└── Call 8: Factuality → scores[]
 
 Model 2 (GPT_5)
-├── Call 4: Coverage → scores[]
-├── Call 5: Faithfulness → scores[]
-└── Call 6: Factuality → scores[]
+├── Call 5: Coverage → scores[]
+├── Call 6: Quality → scores[]
+├── Call 7: Faithfulness → scores[]
+└── Call 8: Factuality → scores[]
 
     ↓
 
 aggregateScores():
 ├── Categorical: majority vote across models
 ├── Binary: majority vote (>50% yes → yes)
+├── Skipped: preserved as-is (no aggregation)
 ├── Reasoning: all model reasonings joined, agreement % noted
 └── Judge model: "ensemble(opus-4-6+gpt-5)"
 ```
 
 **Concurrency:** All models run in parallel via `Promise.all()`. Failed models are filtered out — if only one succeeds, its scores are used directly.
+
+**Model control:** Calls 5-7 use DEFAULT agent with modelSetId — full model control. Call 8 uses ADVANCED (Gemini natively).
 
 **Current panel:** Opus 4.6 (via Vertex) + GPT-5
 
@@ -437,9 +547,9 @@ aggregateScores():
 
 ## Call Flow Diagrams
 
-### Quick Eval (2 judge calls per case)
+### Quick Eval (3 judge calls per case)
 ```
-                     Call 7
+                     Call 9
                   Schema Fetch
                        │
 For each case:         ▼
@@ -448,26 +558,30 @@ For each case:         ▼
 │  → response, traceId, reasoningChain │
 └──────────┬───────────────────────────┘
            │
-     ┌─────┴──────┐
-     ▼            ▼
-  Call 4       Call 5
-  Coverage     Faithfulness
-  (+ eval      (+ reasoning
-   guidance)    chain)
-     │            │
-     └─────┬──────┘
+           ▼
+      Call 4: Fetch Source Docs
+      → { title, content }[]
+           │
+     ┌─────┼──────┐
+     ▼     ▼      ▼
+  Call 5  Call 6  Call 7
+  Cover.  Qual.   Faith.
+  (eval   (query  (pre-fetched
+   guid.)  only)   doc content)
+     │     │      │
+     └─────┼──────┘
            ▼
      Save to SQLite
 ```
 
-### Deep Eval (3 judge calls per case)
+### Deep Eval (4 judge calls per case)
 ```
 Same as Quick, plus:
            │
            ▼
-        Call 6
+        Call 8
        Factuality
-    (+ company search)
+    (ADVANCED + company search)
            │
            ▼
      Save to SQLite
@@ -475,8 +589,8 @@ Same as Quick, plus:
 
 ### Smart Generation (2 AI calls per case)
 ```
-Call 8: Agent Info
-Call 7: Schema Fetch
+Call 10: Agent Info
+Call 9: Schema Fetch
      │
      ▼
   Call 2: Generate Inputs (×1)
@@ -495,4 +609,4 @@ Call 7: Schema Fetch
 
 *This document maps every AI API call. For evaluation methodology, see `evaluation-framework.md`. For system architecture, see `architecture.md`.*
 
--- Axon | 2026-02-18
+-- Axon | 2026-02-20

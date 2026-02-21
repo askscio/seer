@@ -17,7 +17,7 @@ export interface CriterionDefinition {
   description: string
   rubric: string
   scoreType: 'binary' | 'categorical' | 'metric'
-  judgeCall: 'coverage' | 'faithfulness' | 'factuality' | 'metric'
+  judgeCall: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'metric'
   scaleConfig?: {
     categories?: string[]
     categoryValues?: Record<string, number>  // Map categories to numeric values for aggregation
@@ -73,7 +73,7 @@ The eval guidance describes themes to cover, not exact text to match. Different 
 
 Evaluate information density, not length. A concise correct answer is BETTER than a verbose padded one.`,
     scoreType: 'categorical',
-    judgeCall: 'coverage',
+    judgeCall: 'quality',
     scaleConfig: { categories: QUALITY_CATEGORIES, categoryValues: QUALITY_VALUES },
     weight: 0.7,
   },
@@ -174,7 +174,7 @@ export function getCriterion(id: string): CriterionDefinition | undefined {
   return DEFAULT_CRITERIA.find(c => c.id === id)
 }
 
-export function getCriteriaByCall(call: 'coverage' | 'faithfulness' | 'factuality' | 'metric'): CriterionDefinition[] {
+export function getCriteriaByCall(call: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'metric'): CriterionDefinition[] {
   return DEFAULT_CRITERIA.filter(c => c.judgeCall === call)
 }
 

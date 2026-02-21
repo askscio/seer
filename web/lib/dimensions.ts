@@ -8,7 +8,7 @@ export interface DimensionInfo {
   description: string
   context: string  // What inputs/tools the judge uses
   tooltip: string  // Full tooltip text combining description + context
-  group: 'coverage' | 'faithfulness' | 'factuality' | 'metric'
+  group: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'metric'
 }
 
 export const DIMENSIONS: Record<string, DimensionInfo> = {
@@ -22,22 +22,22 @@ export const DIMENSIONS: Record<string, DimensionInfo> = {
   response_quality: {
     name: 'Response Quality',
     description: 'Is the output well-structured, concise, and actionable?',
-    context: 'Uses: query + eval guidance + response. No tools.',
-    tooltip: 'Evaluates structure, conciseness, and actionability independent of factual content. Uses: query + eval guidance + response. No search tools.',
-    group: 'coverage',
+    context: 'Uses: query + response only. No tools. No eval guidance.',
+    tooltip: 'Evaluates structure, conciseness, and actionability independent of factual content. Isolated from eval guidance to prevent anchoring bias. Uses: query + response only. No search tools.',
+    group: 'quality',
   },
   groundedness: {
     name: 'Groundedness',
     description: 'Are claims supported by the actual content of the retrieved documents?',
-    context: 'Uses: query + agent trace + response. Reads source docs via search.',
-    tooltip: 'The judge reads the actual documents the agent retrieved (not just titles) and checks whether each claim is supported by their content. Uses: query + agent trace + response + company search tools to read source documents.',
+    context: 'Uses: query + agent trace + pre-fetched doc content + response. No tools.',
+    tooltip: 'Document content is pre-fetched via Glean search API and injected into the prompt. The judge checks whether each claim is supported by the actual content — not just titles. Uses: query + agent trace + pre-fetched document excerpts + response. No search tools needed.',
     group: 'faithfulness',
   },
   hallucination_risk: {
     name: 'Hallucination Risk',
     description: 'Does it assert specific details not found in the source documents?',
-    context: 'Uses: query + agent trace + response. Reads source docs via search.',
-    tooltip: 'Checks for specific unsupported details (names, numbers, dates, metrics) by reading the agent\'s source documents. Rated low/medium/high. Uses: query + agent trace + response + company search tools to read source documents.',
+    context: 'Uses: query + agent trace + pre-fetched doc content + response. No tools.',
+    tooltip: 'Checks for specific unsupported details (names, numbers, dates, metrics) against pre-fetched document content. Rated low/medium/high. Uses: query + agent trace + pre-fetched document excerpts + response. No search tools needed.',
     group: 'faithfulness',
   },
   factual_accuracy: {

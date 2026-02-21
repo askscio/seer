@@ -104,7 +104,7 @@ CLI ←→ Shared SQLite ←→ Web UI
         Eval Engine
       ├── Agent Runner    (runworkflow API)
       ├── Smart Generator (ADVANCED agent + company tools)
-      ├── Judge           (3-call architecture, Opus 4.6)
+      ├── Judge           (4-call architecture, Opus 4.6)
       └── Metrics         (latency, tool calls)
 ```
 

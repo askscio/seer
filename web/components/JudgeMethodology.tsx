@@ -11,11 +11,11 @@ const JUDGE_CALLS = {
   coverage: {
     label: 'Coverage',
     sublabel: 'Reference-based · Call 1',
-    description: 'Compares the agent response against eval guidance themes. The judge decomposes guidance into discrete themes and classifies each as COVERED, TOUCHED, or MISSING.',
+    description: 'Compares the agent response against eval guidance themes. The judge decomposes guidance into discrete themes and classifies each as COVERED, TOUCHED, or MISSING. Skipped if no eval guidance is provided.',
     inputs: ['Query', 'Eval guidance', 'Agent response'],
     model: 'Opus 4.6 (via modelSetId)',
     tools: 'None',
-    criteria: ['topical_coverage', 'response_quality'],
+    criteria: ['topical_coverage'],
     prompt: `You are an expert evaluator assessing an AI agent's response.
 
 === {CRITERIA_BLOCK} ===
@@ -46,13 +46,44 @@ The eval guidance describes ONE valid answer, not THE only valid answer. Do not 
 
 {score_format}`,
   },
+  quality: {
+    label: 'Quality',
+    sublabel: 'Standalone · Call 2',
+    description: 'Evaluates response quality independent of expected content. Isolated from eval guidance to prevent anchoring bias — the judge sees only the query and response, ensuring quality assessment is not contaminated by knowledge of what the "right answer" should contain.',
+    inputs: ['Query', 'Agent response'],
+    model: 'Opus 4.6 (via modelSetId)',
+    tools: 'None',
+    criteria: ['response_quality'],
+    prompt: `You are an expert evaluator assessing the quality of an AI agent's response. You are evaluating ONLY the structure, clarity, and presentation — not factual correctness or topic coverage.
+
+=== {CRITERIA_BLOCK} ===
+
+=== MATERIAL ===
+
+<query>{query}</query>
+
+<actual_response>
+{response}
+</actual_response>
+
+=== INSTRUCTIONS ===
+
+1. Evaluate the response's structure, conciseness, and actionability
+2. Check formatting appropriateness for the query type
+3. Assess information density — concise and specific is better than verbose and padded
+4. Assign a category using the rubric
+
+Do NOT evaluate whether the response covers the right topics or contains correct facts. Focus purely on how well the information is presented.
+
+{score_format}`,
+  },
   faithfulness: {
     label: 'Faithfulness',
-    sublabel: 'Source-grounded · Call 2',
-    description: 'Checks if the response faithfully represents the content of the documents the agent retrieved. The judge uses company search tools to read the actual source documents — not just their titles — and verifies claims against their real content.',
-    inputs: ['Query', 'Agent execution trace', 'Source document list', 'Agent response'],
-    model: 'ADVANCED (Gemini) + modelSetId',
-    tools: 'Company search (reads agent\'s source docs)',
+    sublabel: 'Source-grounded · Call 3',
+    description: 'Checks if the response faithfully represents the content of the documents the agent retrieved. Document content is pre-fetched via Glean search API and injected into the prompt — no search tools needed. This gives full model control via modelSetId.',
+    inputs: ['Query', 'Agent execution trace', 'Pre-fetched document excerpts', 'Agent response'],
+    model: 'Opus 4.6 (via modelSetId)',
+    tools: 'None (documents pre-fetched)',
     criteria: ['groundedness', 'hallucination_risk'],
     prompt: `You are evaluating whether an AI agent's response is faithful to what it actually retrieved. You are NOT checking correctness — only whether the response accurately represents the content of the source documents.
 
@@ -67,9 +98,9 @@ The eval guidance describes ONE valid answer, not THE only valid answer. Do not 
 </agent_execution_trace>
 
 <agent_source_documents>
-The agent retrieved these documents during execution. Use your search tools to read their actual content, then check if the response faithfully represents what they say.
+The following document excerpts were retrieved by the agent during execution. Check whether the response faithfully represents what these documents say.
 
-{source_document_list}
+{pre_fetched_document_content}
 </agent_source_documents>
 
 <actual_response>
@@ -78,7 +109,7 @@ The agent retrieved these documents during execution. Use your search tools to r
 
 === INSTRUCTIONS ===
 
-1. Use your company search tools to read the actual content of the source documents listed above
+1. Read the document excerpts provided above
 2. Identify the key claims in the agent's response
 3. For each claim, check whether it is supported by the actual content of the retrieved documents
 4. Flag any claims where the response misrepresents, exaggerates, or fabricates details not in the sources
@@ -94,7 +125,7 @@ A response that says "no data found" when no documents were retrieved is CORRECT
   },
   factuality: {
     label: 'Factuality',
-    sublabel: 'Search-verified · Call 3',
+    sublabel: 'Search-verified · Call 4',
     description: 'The judge independently searches company data to verify factual claims. Most expensive call — the judge uses Glean\'s ADVANCED agent with company tools to look up names, numbers, dates, and metrics.',
     inputs: ['Query', 'Agent response', 'Agent\'s retrieved sources'],
     model: 'ADVANCED (Gemini) + modelSetId',
@@ -155,7 +186,7 @@ export default function JudgeMethodology({ criteria }: JudgeMethodologyProps) {
   if (activeCalls.length === 0) return null
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6 mt-8">
+    <div className="bg-white rounded-lg border border-border p-6 mt-8">
       <h2 className="text-sm font-semibold text-[#1A1A1A] mb-1">Judge Methodology</h2>
       <p className="text-xs text-cement mb-4">
         Read-only view of the prompt templates used to evaluate each dimension.

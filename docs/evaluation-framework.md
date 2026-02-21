@@ -167,21 +167,21 @@ Glean's ADVANCED agent mode with `enableCompanyTools: true` gives the judge the 
 
 ## Evaluation Modes
 
-### Quick Mode (2 judge calls per case)
+### Quick Mode (3 judge calls per case)
 
 ```
 Criteria: topical_coverage, response_quality, groundedness, hallucination_risk
-Judge calls: Coverage (Call 1) + Faithfulness (Call 2)
+Judge calls: Coverage (Call 1) + Quality (Call 2) + Faithfulness (Call 3)
 Cost: Low
 Use when: Iterating on agent prompts, A/B testing agent configs, routine checks
 ```
 
-### Deep Mode (3 judge calls per case)
+### Deep Mode (4 judge calls per case)
 
 ```
 Criteria: All quick mode + factual_accuracy
-Judge calls: Coverage (Call 1) + Faithfulness (Call 2) + Factuality (Call 3)
-Cost: Higher (Call 3 does independent search)
+Judge calls: Coverage (Call 1) + Quality (Call 2) + Faithfulness (Call 3) + Factuality (Call 4)
+Cost: Higher (Call 4 does independent search)
 Use when: Pre-deployment validation, compliance-sensitive agents, high-stakes deployments
 ```
 

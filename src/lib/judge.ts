@@ -1,10 +1,12 @@
 /**
- * LLM-as-judge with three-call architecture and multi-judge ensemble
+ * LLM-as-judge with four-call architecture and multi-judge ensemble
  *
  * Call 1 (Coverage):     Reference-based — categorical scoring against eval guidance themes
- * Call 2 (Faithfulness): Source-grounded — reads agent's retrieved documents via search, verifies claims
- * Call 3 (Factuality):   Search-verified — ADVANCED agent independently verifies + cites sources
+ * Call 2 (Quality):      Standalone — response quality evaluated without eval guidance (no anchoring bias)
+ * Call 3 (Faithfulness): Source-grounded — pre-fetched document content injected, verifies claims
+ * Call 4 (Factuality):   Search-verified — ADVANCED agent independently verifies + cites sources
  *
+ * Each call sees the minimum context it needs — no contamination between dimensions.
  * Multi-judge: runs each call through multiple models, aggregates via majority vote.
  * Categorical scales per I/O psych SJT research (15% reliability gain).
  */
@@ -14,6 +16,7 @@ import { extractContentTextOrThrow, type GleanResponse } from './extract-content
 import type { CriterionDefinition } from '../criteria/defaults'
 import type { JudgeScore, AgentResult } from '../types'
 import { extractMetric } from './metrics'
+import { fetchSourceDocContent, type SourceDoc } from './fetch-docs'
 
 // Available judge models (cross-family panel)
 // Single source of truth — UI imports this via web/lib/dimensions.ts
@@ -94,7 +97,13 @@ export async function judgeResponse(
 }
 
 /**
- * Run the full judge pipeline for one model
+ * Run the full judge pipeline for one model.
+ *
+ * Four judge calls, each with minimum viable context:
+ * 1. Coverage — query + eval guidance + response (SKIPPED if no eval guidance)
+ * 2. Quality — query + response only (isolated from eval guidance to prevent anchoring)
+ * 3. Faithfulness — query + response + pre-fetched doc content + reasoning chain
+ * 4. Factuality — query + response + live search (ADVANCED agent)
  */
 async function runJudgePipeline(
   criteria: CriterionDefinition[],
@@ -107,22 +116,50 @@ async function runJudgePipeline(
   const scores: JudgeScore[] = []
 
   const coverageCriteria = criteria.filter(c => c.judgeCall === 'coverage')
+  const qualityCriteria = criteria.filter(c => c.judgeCall === 'quality')
   const faithfulnessCriteria = criteria.filter(c => c.judgeCall === 'faithfulness')
   const factualityCriteria = criteria.filter(c => c.judgeCall === 'factuality')
   const metricCriteria = criteria.filter(c => c.judgeCall === 'metric')
 
+  // Metrics: direct extraction, no API call
   for (const c of metricCriteria) {
     scores.push(extractMetric(c, agentResult))
   }
 
-  if (coverageCriteria.length > 0) {
-    scores.push(...await judgeCoverageBatch(coverageCriteria, query, response, evalGuidance, model))
-  }
-
+  // Fetch source doc content (needed for faithfulness call)
+  let sourceDocContent: SourceDoc[] = []
   if (faithfulnessCriteria.length > 0) {
-    scores.push(...await judgeFaithfulnessBatch(faithfulnessCriteria, query, response, agentResult.reasoningChain, model))
+    sourceDocContent = await fetchSourceDocContent(agentResult.reasoningChain)
   }
 
+  // Call 1: Coverage — skip if no eval guidance (themes are undefined without it)
+  if (coverageCriteria.length > 0) {
+    if (evalGuidance) {
+      scores.push(...await judgeCoverageBatch(coverageCriteria, query, response, evalGuidance, model))
+    } else {
+      // No eval guidance → skip coverage dimensions with explicit 'skipped' status
+      for (const c of coverageCriteria) {
+        scores.push({
+          criterionId: c.id,
+          scoreCategory: 'skipped',
+          reasoning: 'No eval guidance provided — topical coverage requires themes to evaluate against.',
+          judgeModel: model.name,
+        })
+      }
+    }
+  }
+
+  // Call 2: Quality — query + response only (no eval guidance, no anchoring bias)
+  if (qualityCriteria.length > 0) {
+    scores.push(...await judgeQualityBatch(qualityCriteria, query, response, model))
+  }
+
+  // Call 3: Faithfulness — pre-fetched doc content injected (DEFAULT agent, full model control)
+  if (faithfulnessCriteria.length > 0) {
+    scores.push(...await judgeFaithfulnessBatch(faithfulnessCriteria, query, response, agentResult.reasoningChain, sourceDocContent, model))
+  }
+
+  // Call 4: Factuality — ADVANCED agent with live search
   for (const c of factualityCriteria) {
     scores.push(await judgeFactuality(c, query, response, agentResult, model))
   }
@@ -131,12 +168,13 @@ async function runJudgePipeline(
 }
 
 // ===== Call 1: Coverage (reference-based, categorical) =====
+// Only called when evalGuidance is present (guarded in runJudgePipeline)
 
 async function judgeCoverageBatch(
   criteria: CriterionDefinition[],
   query: string,
   response: string,
-  evalGuidance: string | undefined,
+  evalGuidance: string,
   model: { id: string; name: string },
 ): Promise<JudgeScore[]> {
   const criteriaBlock = criteria.map(c =>
@@ -157,22 +195,20 @@ ${criteriaBlock}
 ${query}
 </query>
 
-${evalGuidance ? `<eval_guidance>
+<eval_guidance>
 ${evalGuidance}
 </eval_guidance>
 
-` : ''}<actual_response>
+<actual_response>
 ${response}
 </actual_response>
 
 === INSTRUCTIONS ===
 
-${evalGuidance ? `1. Extract the key themes from the eval guidance
+1. Extract the key themes from the eval guidance
 2. For each theme, classify coverage: COVERED / TOUCHED / MISSING
 3. Assign a category for each dimension using the rubric
-` : `1. Evaluate the response directly against the query
-2. Assign a category for each dimension using the rubric
-`}
+
 The eval guidance describes ONE valid answer, not THE only valid answer. Do not penalize different wording or additional correct information. Evaluate information density, not length.
 
 <theme_coverage>
@@ -185,27 +221,71 @@ ${scoreFormat}`
   return criteria.map(c => parseScore(text, c, model.name))
 }
 
-// ===== Call 2: Faithfulness (source-grounded) =====
+// ===== Call 2: Quality (standalone, isolated from coverage) =====
+// Evaluates response quality without eval guidance to prevent anchoring bias
+
+async function judgeQualityBatch(
+  criteria: CriterionDefinition[],
+  query: string,
+  response: string,
+  model: { id: string; name: string },
+): Promise<JudgeScore[]> {
+  const criteriaBlock = criteria.map(c =>
+    `=== ${c.id.toUpperCase()} ===\n${c.name}: ${c.description}\n\n${c.rubric}`
+  ).join('\n\n')
+
+  const scoreFormat = criteria.map(c =>
+    `<${c.id}_reasoning>[Your analysis]</${c.id}_reasoning>\n<${c.id}>[${c.scaleConfig?.categories?.join(' / ') || 'value'}]</${c.id}>`
+  ).join('\n\n')
+
+  const prompt = `You are an expert evaluator assessing the quality of an AI agent's response. You are evaluating ONLY the structure, clarity, and presentation — not factual correctness or topic coverage.
+
+${criteriaBlock}
+
+=== MATERIAL ===
+
+<query>
+${query}
+</query>
+
+<actual_response>
+${response}
+</actual_response>
+
+=== INSTRUCTIONS ===
+
+1. Evaluate the response's structure, conciseness, and actionability
+2. Check formatting appropriateness for the query type
+3. Assess information density — concise and specific is better than verbose and padded
+4. Assign a category using the rubric
+
+Do NOT evaluate whether the response covers the right topics or contains correct facts. Focus purely on how well the information is presented.
+
+${scoreFormat}`
+
+  const text = await callJudge(prompt, model.id)
+  return criteria.map(c => parseScore(text, c, model.name))
+}
+
+// ===== Call 3: Faithfulness (source-grounded, pre-fetched content) =====
+// Uses DEFAULT agent with modelSetId — document content is injected, no search tools needed
 
 async function judgeFaithfulnessBatch(
   criteria: CriterionDefinition[],
   query: string,
   response: string,
   reasoningChain: any[] | undefined,
+  sourceDocContent: SourceDoc[],
   model: { id: string; name: string },
 ): Promise<JudgeScore[]> {
   const chainText = formatReasoningChain(reasoningChain)
 
-  // Extract document references from the reasoning chain for the judge to read
-  const sourceDocs = reasoningChain
-    ?.filter(s => s.documentsRead)
-    .flatMap(s => s.documentsRead)
-    .filter((d: any) => d.title || d.url)
-    .slice(0, 20) || []
-
-  const sourceList = sourceDocs.length > 0
-    ? sourceDocs.map((d: any) => `- ${d.title || 'Untitled'}${d.url ? ` (${d.url})` : ''}`).join('\n')
-    : 'No documents found in the reasoning chain.'
+  // Format pre-fetched document content for the judge
+  const docContentBlock = sourceDocContent.length > 0
+    ? sourceDocContent.map(doc =>
+        `--- ${doc.title} ---\n${doc.content}`
+      ).join('\n\n')
+    : 'No documents were retrieved by the agent.'
 
   const criteriaBlock = criteria.map(c =>
     `=== ${c.id.toUpperCase()} ===\n${c.name}: ${c.description}\n\n${c.rubric}`
@@ -233,9 +313,9 @@ ${chainText || 'No reasoning chain available.'}
 </agent_execution_trace>
 
 <agent_source_documents>
-The agent retrieved these documents during execution. Use your search tools to read their actual content, then check if the response faithfully represents what they say.
+The following document excerpts were retrieved by the agent during execution. Check whether the response faithfully represents what these documents say.
 
-${sourceList}
+${docContentBlock}
 </agent_source_documents>
 
 <actual_response>
@@ -244,7 +324,7 @@ ${response}
 
 === INSTRUCTIONS ===
 
-1. Use your company search tools to read the actual content of the source documents listed above
+1. Read the document excerpts provided above
 2. Identify the key claims in the agent's response
 3. For each claim, check whether it is supported by the actual content of the retrieved documents — not just by document titles
 4. Flag any claims where the response misrepresents, exaggerates, or fabricates details that are not in the sources
@@ -258,11 +338,11 @@ A response that says "no data found" when no documents were retrieved is CORRECT
 
 ${scoreFormat}`
 
-  const text = await callJudgeWithTools(prompt, model.id)
+  const text = await callJudge(prompt, model.id)
   return criteria.map(c => parseScore(text, c, model.name))
 }
 
-// ===== Call 3: Factuality (search-verified, source-citing) =====
+// ===== Call 4: Factuality (search-verified, source-citing) =====
 
 async function judgeFactuality(
   criterion: CriterionDefinition,
@@ -337,9 +417,14 @@ function aggregateScores(
       return scoresForCriterion[0]
     }
 
+    // Skip aggregation for skipped dimensions
+    if (scoresForCriterion.every(s => s.scoreCategory === 'skipped')) {
+      return scoresForCriterion[0]
+    }
+
     // For categorical: take majority vote
     if (criterion.scoreType === 'categorical' && scoresForCriterion[0].scoreCategory) {
-      const categories = scoresForCriterion.map(s => s.scoreCategory!).filter(Boolean)
+      const categories = scoresForCriterion.map(s => s.scoreCategory!).filter(c => c && c !== 'skipped')
       const counts = new Map<string, number>()
       for (const cat of categories) {
         counts.set(cat, (counts.get(cat) || 0) + 1)

@@ -129,7 +129,7 @@ async function processCases(
       const structuredFields = caseMetadata?.fields as Record<string, string> | undefined
       const agentResult = await runAgent(agentId, testCase.query, testCase.id, structuredFields)
 
-      // 2. Judge (batched by call type — coverage, faithfulness, factuality)
+      // 2. Judge (batched by call type — coverage, quality, faithfulness, factuality)
       const scores = await judgeResponseBatch(
         criteria,
         testCase.query,
@@ -140,13 +140,14 @@ async function processCases(
       )
 
       // 3. Calculate overall score (weighted average, converting categories to numeric)
-      // Mirrors CLI logic at cli.ts:211-234
+      // Skipped dimensions are excluded from aggregation (no weight contributed)
       let totalWeightedScore = 0
       let totalWeight = 0
 
       for (const score of scores) {
         const criterion = getCriterion(score.criterionId)
         if (!criterion || criterion.scoreType === 'metric') continue
+        if (score.scoreCategory === 'skipped') continue
 
         let numericValue: number | undefined
         if (score.scoreValue !== undefined) {
