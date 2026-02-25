@@ -1,0 +1,6 @@
+query,eval_guidance
+"What is [Account]'s current TCV and seat count?","Should include the current total contract value, number of seats, and contract tier. Should reference the most recent renewal or amendment if applicable."
+"Who are the key stakeholders at [Account]?","Should list primary contacts by role (executive sponsor, day-to-day admin, champion). Should include names, titles, and engagement level if available."
+"What were the main topics discussed in our last meeting with [Account]?","Should reference the most recent meeting by date, list key discussion points, any action items or follow-ups agreed upon, and attendees."
+"What agents has [Account] built?","Should list agent names, their purpose/use case, creation date or status (active/draft), and which team owns each one."
+"How is [Account]'s adoption trending?","Should cover WAU trend (increasing/flat/declining), power user count, agent WAU if applicable, and any notable changes in usage patterns over the past 30 days."

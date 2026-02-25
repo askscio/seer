@@ -241,6 +241,24 @@ export default function NewEvalSet() {
     showToast('Case added', 'success')
   }
 
+  // Download CSV template
+  const downloadTemplate = () => {
+    const template = `query,eval_guidance
+"What is [Account]'s current TCV and seat count?","Should include the current total contract value, number of seats, and contract tier. Should reference the most recent renewal or amendment if applicable."
+"Who are the key stakeholders at [Account]?","Should list primary contacts by role (executive sponsor, day-to-day admin, champion). Should include names, titles, and engagement level if available."
+"What were the main topics discussed in our last meeting with [Account]?","Should reference the most recent meeting by date, list key discussion points, any action items or follow-ups agreed upon, and attendees."
+"What agents has [Account] built?","Should list agent names, their purpose/use case, creation date or status (active/draft), and which team owns each one."
+"How is [Account]'s adoption trending?","Should cover WAU trend (increasing/flat/declining), power user count, agent WAU if applicable, and any notable changes in usage patterns over the past 30 days."
+`
+    const blob = new Blob([template], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'eval-set-template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   // Remove a case
   const handleRemoveCase = (index: number) => {
     setCases(prev => prev.filter((_, i) => i !== index))
@@ -514,17 +532,23 @@ export default function NewEvalSet() {
                   Upload a CSV file with columns: <code className="text-xs bg-surface-page px-1 py-0.5 rounded font-mono">query,eval_guidance</code>.
                   Header row is optional. Eval guidance column is optional.
                 </p>
-                <div>
+                <div className="flex items-center gap-4">
                   <input
                     ref={fileInputRef}
                     type="file"
                     accept=".csv"
                     onChange={handleCSVUpload}
-                    className="block w-full text-sm text-cement
+                    className="block flex-1 text-sm text-cement
                       file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border file:border-border
                       file:text-sm file:font-medium file:bg-surface-page file:text-[#1A1A1A]
                       hover:file:bg-glean-oatmeal-dark file:cursor-pointer file:transition-colors"
                   />
+                  <button
+                    onClick={downloadTemplate}
+                    className="text-xs text-glean-blue hover:text-glean-blue-hover font-medium transition-colors whitespace-nowrap"
+                  >
+                    ↓ Download template
+                  </button>
                 </div>
               </div>
             )}
