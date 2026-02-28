@@ -2,6 +2,25 @@
  * Core domain types for Seer agent evaluation framework
  */
 
+// Agent classification based on capabilities and execution mode
+export type AgentType = 'workflow' | 'autonomous' | 'unknown'
+
+// Agent info with capabilities for routing decisions
+export interface AgentCapabilities {
+  'ap.io.messages'?: boolean   // Accepts chat-style messages (autonomous agents)
+  'ap.io.streaming'?: boolean  // Supports streaming output
+  [key: string]: boolean | undefined
+}
+
+// Single turn in a multi-turn conversation
+export interface ConversationTurn {
+  role: 'user' | 'agent'
+  content: string
+  toolCalls?: any[]
+  traceId?: string
+  timestamp: Date
+}
+
 // Eval case: single query with expected behavior
 export interface EvalCase {
   id: string
@@ -31,6 +50,9 @@ export interface AgentResult {
   toolCalls?: any[]          // Tools used: Glean Search, Think, Generate, etc.
   traceId?: string           // workflowTraceId for linking to debug UI
   reasoningChain?: any[]     // Search queries, docs read, steps taken
+  chatId?: string            // For multi-turn conversation continuation
+  transcript?: ConversationTurn[]  // Full multi-turn conversation history
+  agentType?: AgentType      // How the agent was executed
   timestamp: Date
   // Note: token counts not available via REST API (see docs/TRACE_API_LIMITATIONS.md)
 }

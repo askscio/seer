@@ -12,7 +12,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { generateId } from './lib/id'
 import { db, initializeDB } from './db/index'
 import { evalSets, evalCases, evalRuns, evalResults, evalScores, evalCriteria } from './db/schema'
-import { runAgent } from './data/glean'
+import { runAgent, runMultiTurnAgent, getAgentType } from './data/glean'
 import { judgeResponseBatch, JUDGE_MODELS } from './lib/judge'
 import { DEFAULT_CRITERIA, getCriterion } from './criteria/defaults'
 import { smartGenerate } from './lib/generate-agent'
@@ -104,11 +104,13 @@ setCmd
       }
 
       const setId = generateId()
+      const detectedAgentType = await getAgentType(opts.agentId)
       await db.insert(evalSets).values({
         id: setId,
         name: setName,
         description: setDescription || '',
         agentId: opts.agentId,
+        agentType: detectedAgentType,
         createdAt: new Date()
       })
 
@@ -364,6 +366,8 @@ program
   .option('--criteria <list>', 'Comma-separated criteria IDs', 'topical_coverage,response_quality,groundedness,hallucination_risk')
   .option('--deep', 'Include factual accuracy verification (adds 4th judge call with company search)', false)
   .option('--multi-judge', 'Run with multiple judge models (Opus 4.6 + GPT-5)', false)
+  .option('--multi-turn', 'Enable multi-turn conversation mode (autonomous agents only)', false)
+  .option('--max-turns <n>', 'Max conversation turns for multi-turn mode', '5')
   .action(async (setId, opts) => {
     try {
       // Get eval set
@@ -395,12 +399,20 @@ program
         ? `Ensemble (${judgeModelIds.map(id => JUDGE_MODELS.find(m => m.id === id)?.name).join(', ')})`
         : JUDGE_MODELS.find(m => m.id === judgeModelIds[0])?.displayName || judgeModelIds[0]
 
-      const mode = opts.deep
+      let mode = opts.deep
         ? (opts.multiJudge ? 'Deep + Multi-Judge' : 'Deep (with factuality)')
         : (opts.multiJudge ? 'Multi-Judge' : 'Quick')
+      if (opts.multiTurn) mode += ` + Multi-Turn (max ${opts.maxTurns} turns)`
+
+      // Detect agent type for routing
+      const agentType = await getAgentType(set.agentId)
+      const agentTypeLabel = agentType === 'autonomous' ? 'Autonomous (Chat API)'
+        : agentType === 'workflow' ? 'Workflow (runworkflow)'
+        : 'Unknown'
 
       console.log(`\n🔍 Running evaluation: ${set.name}`)
       console.log(`   Agent: ${set.agentId}`)
+      console.log(`   Type: ${agentTypeLabel}`)
       console.log(`   Cases: ${cases.length}`)
       console.log(`   Criteria: ${criteriaIds.join(', ')}`)
       console.log(`   Mode: ${mode}`)
@@ -432,10 +444,18 @@ program
         process.stdout.write(`[${caseNum}/${cases.length}] Evaluating case ${testCase.id.slice(0, 8)}... `)
 
         try {
-          // 1. Run agent (use structured fields from metadata if available)
+          // 1. Run agent — multi-turn or single-turn based on flag + agent type
           const caseMetadata = testCase.metadata ? JSON.parse(testCase.metadata) : null
           const structuredFields = caseMetadata?.fields as Record<string, string> | undefined
-          const agentResult = await runAgent(set.agentId, testCase.query, testCase.id, structuredFields)
+          const useMultiTurn = opts.multiTurn && agentType === 'autonomous'
+
+          const agentResult = useMultiTurn
+            ? await runMultiTurnAgent(set.agentId, testCase.query, testCase.id, {
+                maxTurns: parseInt(opts.maxTurns) || 5,
+                evalGuidance: testCase.evalGuidance || undefined,
+                simulatorContext: caseMetadata?.simulatorContext,
+              })
+            : await runAgent(set.agentId, testCase.query, testCase.id, structuredFields)
 
           // 2. Judge (batch by call type — coverage, faithfulness, factuality)
           const scores = await judgeResponseBatch(
@@ -482,6 +502,7 @@ program
             caseId: testCase.id,
             agentResponse: agentResult.response,
             agentTrace: agentResult.reasoningChain ? JSON.stringify(agentResult.reasoningChain) : null,
+            transcript: agentResult.transcript ? JSON.stringify(agentResult.transcript) : null,
             latencyMs: agentResult.latencyMs,
             totalTokens: null,  // Not available via REST API (see TRACE_API_LIMITATIONS.md)
             toolCalls: JSON.stringify(agentResult.toolCalls || []),
@@ -764,11 +785,13 @@ program
 
       if (shouldSave) {
         const setId = generateId()
+        const detectedAgentType = await getAgentType(agentId)
         await db.insert(evalSets).values({
           id: setId,
           name: opts.name || generated.name,
           description: opts.description || generated.description,
           agentId,
+          agentType: detectedAgentType,
           createdAt: new Date()
         })
 

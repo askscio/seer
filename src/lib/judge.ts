@@ -14,9 +14,25 @@
 import { config } from './config'
 import { extractContentTextOrThrow, type GleanResponse } from './extract-content'
 import type { CriterionDefinition } from '../criteria/defaults'
-import type { JudgeScore, AgentResult } from '../types'
+import type { JudgeScore, AgentResult, ConversationTurn } from '../types'
 import { extractMetric } from './metrics'
 import { fetchSourceDocContent, type SourceDoc } from './fetch-docs'
+
+/**
+ * Format an agent's output for judging.
+ * For multi-turn conversations, renders the full transcript.
+ * For single-turn, returns the response as-is.
+ */
+function formatResponseForJudge(response: string, transcript?: ConversationTurn[]): string {
+  if (!transcript || transcript.length <= 2) return response
+
+  // Multi-turn: format as a readable conversation
+  const formatted = transcript
+    .map(t => `**${t.role === 'user' ? 'User' : 'Agent'}:** ${t.content}`)
+    .join('\n\n')
+
+  return `[Multi-turn conversation — ${transcript.filter(t => t.role === 'agent').length} agent turns]\n\n${formatted}`
+}
 
 // Available judge models (cross-family panel)
 // Single source of truth — UI imports this via web/lib/dimensions.ts
@@ -115,6 +131,9 @@ async function runJudgePipeline(
 ): Promise<JudgeScore[]> {
   const scores: JudgeScore[] = []
 
+  // For multi-turn conversations, format the full transcript for judges
+  const judgeResponse = formatResponseForJudge(response, agentResult.transcript)
+
   const coverageCriteria = criteria.filter(c => c.judgeCall === 'coverage')
   const qualityCriteria = criteria.filter(c => c.judgeCall === 'quality')
   const faithfulnessCriteria = criteria.filter(c => c.judgeCall === 'faithfulness')
@@ -135,7 +154,7 @@ async function runJudgePipeline(
   // Call 1: Coverage — skip if no eval guidance (themes are undefined without it)
   if (coverageCriteria.length > 0) {
     if (evalGuidance) {
-      scores.push(...await judgeCoverageBatch(coverageCriteria, query, response, evalGuidance, model))
+      scores.push(...await judgeCoverageBatch(coverageCriteria, query, judgeResponse, evalGuidance, model))
     } else {
       // No eval guidance → skip coverage dimensions with explicit 'skipped' status
       for (const c of coverageCriteria) {
@@ -151,17 +170,17 @@ async function runJudgePipeline(
 
   // Call 2: Quality — query + response only (no eval guidance, no anchoring bias)
   if (qualityCriteria.length > 0) {
-    scores.push(...await judgeQualityBatch(qualityCriteria, query, response, model))
+    scores.push(...await judgeQualityBatch(qualityCriteria, query, judgeResponse, model))
   }
 
   // Call 3: Faithfulness — pre-fetched doc content injected (DEFAULT agent, full model control)
   if (faithfulnessCriteria.length > 0) {
-    scores.push(...await judgeFaithfulnessBatch(faithfulnessCriteria, query, response, agentResult.reasoningChain, sourceDocContent, model))
+    scores.push(...await judgeFaithfulnessBatch(faithfulnessCriteria, query, judgeResponse, agentResult.reasoningChain, sourceDocContent, model))
   }
 
   // Call 4: Factuality — ADVANCED agent with live search
   for (const c of factualityCriteria) {
-    scores.push(await judgeFactuality(c, query, response, agentResult, model))
+    scores.push(await judgeFactuality(c, query, judgeResponse, agentResult, model))
   }
 
   return scores

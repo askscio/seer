@@ -12,6 +12,7 @@ export const evalSets = sqliteTable('eval_sets', {
   description: text('description'),
   agentId: text('agent_id').notNull(),
   agentSchema: text('agent_schema'), // JSON: full agent schema snapshot at creation time
+  agentType: text('agent_type'),     // 'workflow' | 'autonomous' | 'unknown' — detected from capabilities
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull()
 })
 
@@ -57,6 +58,7 @@ export const evalResults = sqliteTable('eval_results', {
   // Agent response
   agentResponse: text('agent_response').notNull(),
   agentTrace: text('agent_trace'), // JSON: reasoning chain (searches, docs read, tool invocations)
+  transcript: text('transcript'),  // JSON: ConversationTurn[] for multi-turn conversations
   latencyMs: integer('latency_ms').notNull(),
   totalTokens: integer('total_tokens'),
   toolCalls: text('tool_calls'), // JSON array
