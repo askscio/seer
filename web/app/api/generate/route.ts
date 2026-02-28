@@ -53,6 +53,7 @@ export async function POST(request: Request) {
               agentDescription: agentInfo?.description || '',
               schema,
               count,
+              agentType: agentInfo?.agentType,
               onProgress: (event) => send(event),
             })
 
@@ -82,6 +83,7 @@ export async function POST(request: Request) {
       agentDescription: agentInfo?.description || '',
       schema,
       count,
+      agentType: agentInfo?.agentType,
     })
 
     return NextResponse.json(generated)

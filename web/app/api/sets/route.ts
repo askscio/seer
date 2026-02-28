@@ -18,7 +18,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { name, description, agentId, agentSchema } = body
+    const { name, description, agentId, agentSchema, agentType } = body
 
     if (!name || !description || !agentId) {
       return NextResponse.json(
@@ -39,6 +39,7 @@ export async function POST(request: Request) {
       description,
       agentId,
       agentSchema: agentSchema ? JSON.stringify(agentSchema) : null,
+      agentType: agentType || null,
       createdAt: new Date(),
     }).returning()
 

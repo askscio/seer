@@ -10,6 +10,7 @@ interface EvalCase {
   query: string
   evalGuidance: string | null
   context: string | null
+  metadata: string | null
 }
 
 interface CaseTableProps {
@@ -123,6 +124,15 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
                 ) : (
                   <span className="text-sm text-gray-400 italic">Not specified</span>
                 )}
+                {(() => {
+                  const meta = testCase.metadata ? JSON.parse(testCase.metadata) : null
+                  return meta?.simulatorContext ? (
+                    <div className="mt-2 pt-2 border-t border-border-subtle">
+                      <span className="text-[10px] font-medium text-cement uppercase tracking-wide">Simulator Context</span>
+                      <p className="text-xs text-cement mt-0.5 leading-relaxed">{meta.simulatorContext}</p>
+                    </div>
+                  ) : null
+                })()}
               </td>
               <td className="px-4 py-3 text-right">
                 {editingId === testCase.id ? (

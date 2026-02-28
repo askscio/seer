@@ -17,6 +17,7 @@ export type GenerateProgressEvent =
   | { phase: 'schema'; message: string }
   | { phase: 'inputs'; message: string }
   | { phase: 'guidance'; message: string; current: number; total: number }
+  | { phase: 'simulator'; message: string; current: number; total: number }
   | { phase: 'case'; case: SmartGeneratedCase; current: number; total: number }
   | { phase: 'done'; message: string }
 
@@ -26,6 +27,7 @@ export interface SmartGenerateRequest {
   agentDescription: string
   schema: any
   count: number
+  agentType?: string  // 'autonomous' triggers simulator context generation
   onProgress?: (event: GenerateProgressEvent) => void
 }
 
@@ -33,6 +35,7 @@ export interface SmartGeneratedCase {
   input: Record<string, string>
   query: string
   evalGuidance: string
+  simulatorContext?: string  // For autonomous/multi-turn agents
 }
 
 export interface SmartGeneratedEvalSet {
@@ -75,13 +78,15 @@ async function askAgent(query: string): Promise<string> {
  * Generate a grounded eval set
  */
 export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGeneratedEvalSet> {
-  const { agentId, agentName, agentDescription, schema, count, onProgress } = req
+  const { agentId, agentName, agentDescription, schema, count, agentType, onProgress } = req
   const inputSchema = schema.input_schema || {}
   const inputFields = Object.keys(inputSchema)
   const hasFormInputs = inputFields.length > 0
+  const isAutonomous = agentType === 'autonomous'
 
   console.log(`\n🤖 Smart generation for "${agentName}"`)
   console.log(`   Schema: ${hasFormInputs ? inputFields.join(', ') : 'chat-style'}`)
+  if (isAutonomous) console.log(`   Type: autonomous (will generate simulator context)`)
   onProgress?.({ phase: 'schema', message: `Reading agent schema for "${agentName}"` })
 
   // Step 1: Find realistic input values using company tools
@@ -105,12 +110,27 @@ export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGen
     const expected = await generateExpectedOutput(agentName, agentDescription, input)
 
     const query = hasFormInputs
-      ? Object.values(input)[0] || ''  // For single-field forms, just the value
+      ? Object.values(input)[0] || ''
       : input.query || Object.values(input)[0] || ''
 
     const newCase: SmartGeneratedCase = { input, query, evalGuidance: expected }
     cases.push(newCase)
     onProgress?.({ phase: 'case', case: newCase, current: i + 1, total: candidateInputs.length })
+  }
+
+  // Step 3: For autonomous agents, generate simulator context per case
+  if (isAutonomous) {
+    console.log(`\n3️⃣  Generating simulator context...`)
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i]
+      const displayVal = c.query.slice(0, 60)
+      console.log(`   [${i + 1}/${cases.length}] ${displayVal}`)
+      onProgress?.({ phase: 'simulator', message: `Generating simulator context for "${displayVal}"...`, current: i + 1, total: cases.length })
+
+      cases[i].simulatorContext = await generateSimulatorContext(
+        agentName, agentDescription, c.query, c.evalGuidance
+      )
+    }
   }
 
   onProgress?.({ phase: 'done', message: `Generated ${cases.length} test cases` })
@@ -254,6 +274,38 @@ Search our company's documents for materials related to this input. Then describ
 - If no relevant data exists, say the expected behavior is "agent should state no data found."
 
 Be specific and concrete. No generic advice.`
+  )
+
+  return text.trim()
+}
+
+/**
+ * Step 3: Generate simulator context for an autonomous/multi-turn agent.
+ * Describes who the simulated user is and how they should respond to follow-ups.
+ */
+async function generateSimulatorContext(
+  agentName: string,
+  agentDescription: string,
+  query: string,
+  evalGuidance: string,
+): Promise<string> {
+  const text = await askAgent(
+    `I'm testing a conversational Glean agent called "${agentName}".
+Description: ${agentDescription}
+
+This agent is multi-turn — it may ask the user follow-up questions before giving a final answer.
+
+The user's initial query is: "${query}"
+
+What a good final outcome looks like: ${evalGuidance}
+
+Write a brief "simulator context" that describes how a simulated user should behave during this conversation. Include:
+1. **Role**: Who is the user? (job title, team, what they're working on)
+2. **Knowledge**: What specific details can they provide if asked? (account names, metrics, dates, project names — use real examples from our company data)
+3. **Goal**: What outcome are they trying to achieve?
+4. **Style**: How do they communicate? (concise, detailed, impatient, collaborative)
+
+Keep it to 3-5 sentences. Be specific and grounded in real company context, not generic.`
   )
 
   return text.trim()

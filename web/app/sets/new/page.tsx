@@ -8,6 +8,7 @@ import { Markdown } from '@/components/Markdown'
 interface TestCase {
   query: string
   evalGuidance?: string
+  simulatorContext?: string  // For multi-turn: how the simulated user should behave
   fields?: Record<string, string>  // Structured inputs for multi-field agents
   source: 'generate' | 'csv' | 'manual'
 }
@@ -47,6 +48,7 @@ export default function NewEvalSet() {
   // Manual tab state
   const [manualQuery, setManualQuery] = useState('')
   const [manualGuidance, setManualGuidance] = useState('')
+  const [manualSimulatorContext, setManualSimulatorContext] = useState('')
 
   // Submit state
   const [creating, setCreating] = useState(false)
@@ -143,11 +145,16 @@ export default function NewEvalSet() {
               setGeneratePhase(`Generating eval guidance... (${data.current}/${data.total})`)
               setGenerateProgress({ current: data.current - 1, total: data.total })
               break
+            case 'simulator':
+              setGeneratePhase(`Generating simulator context... (${data.current}/${data.total})`)
+              setGenerateProgress({ current: data.current - 1, total: data.total })
+              break
             case 'case':
               // Add case to list as it arrives (preserve structured fields for multi-field agents)
               setCases(prev => [...prev, {
                 query: data.case.query,
                 evalGuidance: data.case.evalGuidance,
+                simulatorContext: data.case.simulatorContext,
                 fields: Object.keys(data.case.input || {}).length > 1 ? data.case.input : undefined,
                 source: 'generate' as const,
               }])
@@ -237,9 +244,11 @@ export default function NewEvalSet() {
     setCases(prev => [...prev, {
       query: manualQuery.trim(),
       evalGuidance: manualGuidance.trim() || undefined,
+      simulatorContext: manualSimulatorContext.trim() || undefined,
       source: 'manual',
     }])
     setManualQuery('')
+    setManualSimulatorContext('')
     setManualGuidance('')
     showToast('Case added', 'success')
   }
@@ -309,7 +318,7 @@ export default function NewEvalSet() {
       const setResp = await fetch('/api/sets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description, agentId, agentSchema: agentSchemaData }),
+        body: JSON.stringify({ name, description, agentId, agentSchema: agentSchemaData, agentType }),
       })
 
       if (!setResp.ok) throw new Error('Failed to create eval set')
@@ -326,6 +335,7 @@ export default function NewEvalSet() {
               query: tc.query,
               evalGuidance: tc.evalGuidance || null,
               fields: tc.fields || null,
+              simulatorContext: tc.simulatorContext || null,
             }),
           })
         )
@@ -592,6 +602,20 @@ export default function NewEvalSet() {
                     placeholder="What themes should the response cover?"
                   />
                 </div>
+                {agentType === 'autonomous' && (
+                  <div>
+                    <label className="block text-sm font-medium text-[#1A1A1A] mb-1">
+                      Simulator Context <span className="text-cement text-xs font-normal">(for multi-turn)</span>
+                    </label>
+                    <textarea
+                      value={manualSimulatorContext}
+                      onChange={(e) => setManualSimulatorContext(e.target.value)}
+                      className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-glean-blue/30 focus:border-glean-blue text-sm"
+                      rows={2}
+                      placeholder="Who is the simulated user? What context do they have? How should they respond to follow-ups?"
+                    />
+                  </div>
+                )}
                 <button
                   onClick={handleAddManual}
                   disabled={!manualQuery.trim()}

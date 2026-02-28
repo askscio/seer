@@ -146,6 +146,7 @@ setCmd
           agentDescription: agentInfo?.description || '',
           schema,
           count,
+          agentType: agentInfo?.agentType,
         })
 
         for (const testCase of generated.cases) {
@@ -155,7 +156,7 @@ setCmd
             evalSetId: setId,
             query: testCase.query,
             evalGuidance: testCase.evalGuidance || null,
-            metadata: hasMultiFields ? JSON.stringify({ fields: testCase.input }) : null,
+            metadata: (hasMultiFields || testCase.simulatorContext) ? JSON.stringify({ fields: hasMultiFields ? testCase.input : undefined, simulatorContext: testCase.simulatorContext || undefined }) : null,
             createdAt: new Date()
           })
         }
@@ -764,6 +765,7 @@ program
         agentDescription: agentInfo?.description || '',
         schema,
         count: parseInt(opts.count),
+        agentType: agentInfo?.agentType,
       })
 
       // Show preview
@@ -802,7 +804,7 @@ program
             evalSetId: setId,
             query: testCase.query,
             evalGuidance: testCase.evalGuidance || null,
-            metadata: hasMultiFields ? JSON.stringify({ fields: testCase.input }) : null,
+            metadata: (hasMultiFields || testCase.simulatorContext) ? JSON.stringify({ fields: hasMultiFields ? testCase.input : undefined, simulatorContext: testCase.simulatorContext || undefined }) : null,
             createdAt: new Date()
           })
         }
