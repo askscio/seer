@@ -78,6 +78,15 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
             <div className="flex items-center gap-4 mt-1.5">
               <span className="text-sm text-cement">
                 <span className="font-mono text-xs">{evalSet.agentId.slice(0, 12)}…</span>
+                {evalSet.agentType && (
+                  <span className={`ml-2 px-1.5 py-0.5 text-[10px] rounded-full font-medium ${
+                    evalSet.agentType === 'autonomous'
+                      ? 'bg-[#343CED]/10 text-[#343CED]'
+                      : 'bg-cement/10 text-cement'
+                  }`}>
+                    {evalSet.agentType === 'autonomous' ? 'AUTONOMOUS' : 'WORKFLOW'}
+                  </span>
+                )}
               </span>
               <span className="text-sm text-cement">
                 {evalSet.cases.length} test inputs
@@ -168,7 +177,7 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
       )}
 
       {/* Eval Config Section (replaces modal) */}
-      <EvalConfigSection evalSetId={params.id} hasCases={evalSet.cases.length > 0} />
+      <EvalConfigSection evalSetId={params.id} hasCases={evalSet.cases.length > 0} agentType={evalSet.agentType || undefined} />
 
       {/* Run History */}
       {evalSet.runs.length > 0 && (

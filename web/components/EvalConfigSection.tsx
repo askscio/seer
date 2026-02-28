@@ -9,6 +9,7 @@ import RunProgress from './RunProgress'
 interface EvalConfigSectionProps {
   evalSetId: string
   hasCases: boolean
+  agentType?: string
 }
 
 type EvalMode = 'quick' | 'deep' | 'full' | 'custom'
@@ -74,7 +75,7 @@ const GROUP_LABELS: Record<string, string> = {
   metric: 'Direct Metrics',
 }
 
-export default function EvalConfigSection({ evalSetId, hasCases }: EvalConfigSectionProps) {
+export default function EvalConfigSection({ evalSetId, hasCases, agentType }: EvalConfigSectionProps) {
   const router = useRouter()
   const { showToast } = useToast()
   const [mode, setMode] = useState<EvalMode>('quick')
@@ -82,6 +83,8 @@ export default function EvalConfigSection({ evalSetId, hasCases }: EvalConfigSec
     'topical_coverage', 'groundedness',
   ])
   const [selectedJudges, setSelectedJudges] = useState<string[]>(['OPUS_4_6_VERTEX'])
+  const [multiTurnEnabled, setMultiTurnEnabled] = useState(false)
+  const [maxTurns, setMaxTurns] = useState(5)
   const [running, setRunning] = useState(false)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
 
@@ -146,6 +149,8 @@ export default function EvalConfigSection({ evalSetId, hasCases }: EvalConfigSec
           criteria: activeCriteria,
           judges: selectedJudges,
           mode,
+          multiTurn: multiTurnEnabled,
+          maxTurns,
         }),
       })
 
@@ -283,6 +288,46 @@ export default function EvalConfigSection({ evalSetId, hasCases }: EvalConfigSec
           )}
         </div>
 
+        {/* Multi-Turn Conversation (autonomous agents only) */}
+        {agentType === 'autonomous' && (
+          <div>
+            <label className="text-xs font-medium text-cement uppercase tracking-wide block mb-3">
+              Multi-Turn Conversation
+              <InfoIcon text="Enable simulated conversation where the agent can ask follow-up questions. A simulated user responds based on the case's simulator context, crafting realistic replies grounded in company data. Conversations continue until the agent provides a final answer or reaches max turns." wide />
+            </label>
+            <div className="space-y-3">
+              <label className="flex items-center gap-3 p-2.5 rounded-md border border-border-subtle hover:bg-surface-page cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={multiTurnEnabled}
+                  onChange={(e) => setMultiTurnEnabled(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded accent-[#343CED]"
+                />
+                <div className="flex-1">
+                  <span className="text-sm text-[#1A1A1A]">Enable multi-turn evaluation</span>
+                  <span className="text-xs text-cement ml-2">Simulated user responds to follow-up questions</span>
+                </div>
+              </label>
+              {multiTurnEnabled && (
+                <div className="ml-7 flex items-center gap-3">
+                  <label className="text-sm text-cement">Max turns:</label>
+                  <select
+                    value={maxTurns}
+                    onChange={(e) => setMaxTurns(Number(e.target.value))}
+                    className="px-3 py-1.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30 focus:border-glean-blue"
+                  >
+                    <option value={2}>2</option>
+                    <option value={3}>3</option>
+                    <option value={5}>5 (recommended)</option>
+                    <option value={7}>7</option>
+                    <option value={10}>10</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Summary + Run Button / Progress */}
         {activeRunId ? (
           <div className="border border-glean-blue/20 rounded-md bg-glean-blue-light">
@@ -301,6 +346,9 @@ export default function EvalConfigSection({ evalSetId, hasCases }: EvalConfigSec
               <span className="font-medium">{activeCriteria.length}</span> dimensions ·{' '}
               <span className="font-medium">{selectedJudges.length}</span> judge{selectedJudges.length > 1 ? 's' : ''} ·{' '}
               <span className="font-medium">{totalCallsPerCase}</span> judge calls/case
+              {multiTurnEnabled && (
+                <span className="text-cement"> · multi-turn (max {maxTurns})</span>
+              )}
             </p>
             <button
               onClick={handleRun}

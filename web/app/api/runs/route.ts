@@ -3,7 +3,7 @@ import { db, evalSets, evalCases, evalRuns, evalResults, evalScores } from '@/li
 import { eq, inArray } from 'drizzle-orm'
 
 // Import from CLI code
-import { runAgent } from '../../../../src/data/glean'
+import { runAgent, runMultiTurnAgent, getAgentType } from '../../../../src/data/glean'
 import { judgeResponseBatch, JUDGE_MODELS } from '../../../../src/lib/judge'
 import { getCriterion } from '../../../../src/criteria/defaults'
 import { generateId } from '../../../../src/lib/id'
@@ -16,6 +16,8 @@ export async function POST(request: Request) {
       criteria = ['topical_coverage', 'response_quality', 'groundedness', 'hallucination_risk'],
       judges = ['OPUS_4_6_VERTEX'],
       mode = 'quick',
+      multiTurn = false,
+      maxTurns = 5,
     } = body
 
     if (!evalSetId) {
@@ -42,6 +44,9 @@ export async function POST(request: Request) {
       return criterion
     })
 
+    // Detect agent type for routing
+    const agentType = await getAgentType(set.agentId)
+
     // Create run
     const runId = generateId()
 
@@ -59,11 +64,14 @@ export async function POST(request: Request) {
         judges,
         mode,
         multiJudge: judges.length > 1,
+        multiTurn,
+        maxTurns,
+        agentType,
       })
     })
 
     // Process cases (async - don't block response)
-    processCases(runId, set.agentId, cases, criteriaObjs, judges).catch(console.error)
+    processCases(runId, set.agentId, cases, criteriaObjs, judges, multiTurn, maxTurns, agentType).catch(console.error)
 
     return NextResponse.json({ runId, status: 'started' })
   } catch (error) {
@@ -119,15 +127,26 @@ async function processCases(
   cases: any[],
   criteria: any[],
   judgeModelIds: string[],
+  multiTurn: boolean = false,
+  maxTurns: number = 5,
+  agentType: string = 'workflow',
 ) {
   const results: any[] = []
 
   for (const testCase of cases) {
     try {
-      // 1. Run agent (use structured fields from metadata if available)
+      // 1. Run agent — multi-turn or single-turn based on config + agent type
       const caseMetadata = testCase.metadata ? JSON.parse(testCase.metadata) : null
       const structuredFields = caseMetadata?.fields as Record<string, string> | undefined
-      const agentResult = await runAgent(agentId, testCase.query, testCase.id, structuredFields)
+      const useMultiTurn = multiTurn && agentType === 'autonomous'
+
+      const agentResult = useMultiTurn
+        ? await runMultiTurnAgent(agentId, testCase.query, testCase.id, {
+            maxTurns,
+            evalGuidance: testCase.evalGuidance || undefined,
+            simulatorContext: caseMetadata?.simulatorContext,
+          })
+        : await runAgent(agentId, testCase.query, testCase.id, structuredFields)
 
       // 2. Judge (batched by call type — coverage, quality, faithfulness, factuality)
       const scores = await judgeResponseBatch(
@@ -175,6 +194,7 @@ async function processCases(
         caseId: testCase.id,
         agentResponse: agentResult.response,
         agentTrace: agentResult.reasoningChain ? JSON.stringify(agentResult.reasoningChain) : null,
+        transcript: agentResult.transcript ? JSON.stringify(agentResult.transcript) : null,
         latencyMs: agentResult.latencyMs,
         totalTokens: null, // Not available via REST API
         toolCalls: JSON.stringify(agentResult.toolCalls || []),

@@ -34,6 +34,8 @@ export async function GET(
       name: agentInfo.name,
       description: agentInfo.description,
       schema,
+      agentType: agentInfo.agentType,
+      capabilities: agentInfo.capabilities,
     })
   } catch (error) {
     console.error('Error fetching agent info:', error)

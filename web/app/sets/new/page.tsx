@@ -22,6 +22,7 @@ export default function NewEvalSet() {
   const [agentId, setAgentId] = useState('')
   const [agentName, setAgentName] = useState('')
   const [agentDescription, setAgentDescription] = useState('')
+  const [agentType, setAgentType] = useState<'workflow' | 'autonomous' | 'unknown'>('unknown')
   const [fetchingAgent, setFetchingAgent] = useState(false)
   const [agentFetched, setAgentFetched] = useState(false)
   const [agentSchemaData, setAgentSchemaData] = useState<any>(null)
@@ -61,6 +62,7 @@ export default function NewEvalSet() {
         const data = await resp.json()
         setAgentName(data.name || '')
         setAgentDescription(data.description || '')
+        setAgentType(data.agentType || 'unknown')
         setAgentSchemaData(data.schema || null)
         setAgentFetched(true)
         if (!name) setName(data.name || '')
@@ -80,6 +82,7 @@ export default function NewEvalSet() {
     setAgentFetched(false)
     setAgentName('')
     setAgentDescription('')
+    setAgentType('unknown')
     setAgentSchemaData(null)
 
     // Auto-fetch if agent ID looks valid
@@ -374,7 +377,16 @@ export default function NewEvalSet() {
           </div>
           {agentFetched && agentName && (
             <div className="mt-2 px-3 py-2 bg-glean-blue-light rounded-lg text-sm">
-              <span className="font-medium text-[#1A1A1A]">{agentName}</span>
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-[#1A1A1A]">{agentName}</span>
+                <span className={`px-1.5 py-0.5 text-[10px] rounded-full font-medium ${
+                  agentType === 'autonomous'
+                    ? 'bg-[#343CED]/10 text-[#343CED]'
+                    : 'bg-cement/10 text-cement'
+                }`}>
+                  {agentType === 'autonomous' ? 'AUTONOMOUS' : 'WORKFLOW'}
+                </span>
+              </div>
               {agentDescription && (
                 <p className="text-cement text-xs mt-0.5">{agentDescription}</p>
               )}

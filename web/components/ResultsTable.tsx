@@ -16,6 +16,13 @@ interface Score {
   }
 }
 
+interface ConversationTurn {
+  role: 'user' | 'agent'
+  content: string
+  toolCalls?: any[]
+  traceId?: string
+}
+
 interface ResultRow {
   id: string
   case: {
@@ -24,6 +31,7 @@ interface ResultRow {
   }
   agentResponse: string
   agentTrace: string | null
+  transcript: string | null
   latencyMs: number
   totalTokens: number | null
   toolCalls: string | null
@@ -207,21 +215,25 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                   <tr className="bg-surface-page">
                     <td colSpan={criteria.length + 4} className="px-4 py-4">
                       <div className="space-y-4">
-                        {/* Full query and response */}
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
-                              Full Query
-                            </label>
-                            <Markdown content={result.case?.query || ''} className="text-[#1A1A1A]" />
+                        {/* Full query and response — or conversation transcript */}
+                        {result.transcript ? (
+                          <ConversationThread transcript={result.transcript} />
+                        ) : (
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
+                                Full Query
+                              </label>
+                              <Markdown content={result.case?.query || ''} className="text-[#1A1A1A]" />
+                            </div>
+                            <div>
+                              <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
+                                Agent Response
+                              </label>
+                              <Markdown content={result.agentResponse} className="text-[#1A1A1A]" />
+                            </div>
                           </div>
-                          <div>
-                            <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
-                              Agent Response
-                            </label>
-                            <Markdown content={result.agentResponse} className="text-[#1A1A1A]" />
-                          </div>
-                        </div>
+                        )}
 
                         {/* Metrics */}
                         <div className="flex gap-6 text-sm">
@@ -505,6 +517,65 @@ function AgentTraceView({ trace }: { trace: string }) {
               </div>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ===== Conversation Thread (Multi-Turn) =====
+
+function ConversationThread({ transcript }: { transcript: string }) {
+  const [collapsed, setCollapsed] = useState(true)
+
+  let turns: ConversationTurn[]
+  try {
+    turns = JSON.parse(transcript)
+  } catch {
+    return null
+  }
+
+  if (!Array.isArray(turns) || turns.length === 0) return null
+
+  const agentTurns = turns.filter(t => t.role === 'agent').length
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-semibold text-cement uppercase tracking-wide">
+          Conversation Transcript ({agentTurns} agent turn{agentTurns !== 1 ? 's' : ''})
+        </label>
+        <button
+          onClick={(e) => { e.stopPropagation(); setCollapsed(!collapsed) }}
+          className="text-[10px] text-glean-blue hover:text-glean-blue-hover transition-colors"
+        >
+          {collapsed ? '▼ Expand' : '▲ Collapse'}
+        </button>
+      </div>
+
+      {!collapsed && (
+        <div className="bg-surface-page rounded-lg border border-border p-4 space-y-3 max-h-[32rem] overflow-y-auto">
+          {turns.map((turn, i) => (
+            <div key={i} className={`flex ${turn.role === 'agent' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] px-4 py-2.5 ${
+                turn.role === 'agent'
+                  ? 'bg-glean-blue-light rounded-l-xl rounded-tr-xl'
+                  : 'bg-white border border-border rounded-r-xl rounded-tl-xl'
+              }`}>
+                <div className="text-[10px] text-cement mb-1 font-medium uppercase tracking-wide tracking-wide">
+                  {turn.role === 'user' && i === 0 ? 'User' : turn.role === 'user' ? 'Simulated User' : 'Agent'}
+                </div>
+                <Markdown content={turn.content} className="text-sm" />
+                {turn.toolCalls && turn.toolCalls.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-border-subtle flex items-center gap-1">
+                    <span className="text-[10px] text-cement">
+                      {turn.toolCalls.length} tool{turn.toolCalls.length > 1 ? 's' : ''}: {turn.toolCalls.map((t: any) => t.name).join(', ')}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

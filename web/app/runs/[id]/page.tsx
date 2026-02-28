@@ -58,6 +58,7 @@ async function getRunResults(runId: string) {
         },
         agentResponse: result.agentResponse,
         agentTrace: result.agentTrace,
+        transcript: result.transcript,
         latencyMs: result.latencyMs,
         totalTokens: result.totalTokens,
         toolCalls: result.toolCalls,
