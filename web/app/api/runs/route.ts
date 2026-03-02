@@ -145,6 +145,7 @@ async function processCases(
             maxTurns,
             evalGuidance: testCase.evalGuidance || undefined,
             simulatorContext: caseMetadata?.simulatorContext,
+            simulatorStrategy: caseMetadata?.simulatorStrategy,
           })
         : await runAgent(agentId, testCase.query, testCase.id, structuredFields)
 

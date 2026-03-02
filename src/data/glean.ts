@@ -418,6 +418,7 @@ export async function runMultiTurnAgent(
     timeoutMs?: number
     evalGuidance?: string
     simulatorContext?: string
+    simulatorStrategy?: string
   } = {},
 ): Promise<AgentResult> {
   const maxTurns = opts.maxTurns ?? 5
@@ -513,6 +514,7 @@ export async function runMultiTurnAgent(
         originalQuery: query,
         evalGuidance: opts.evalGuidance,
         simulatorContext: opts.simulatorContext,
+        simulatorStrategy: opts.simulatorStrategy,
       }
     )
 

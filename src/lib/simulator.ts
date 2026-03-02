@@ -45,19 +45,27 @@ export async function generateUserReply(
     originalQuery: string
     evalGuidance?: string
     simulatorContext?: string
+    simulatorStrategy?: string
   },
 ): Promise<{ reply: string; isComplete: boolean }> {
   const conversationHistory = transcript
     .map(t => `${t.role === 'user' ? 'User' : 'Agent'}: ${t.content}`)
     .join('\n\n')
 
-  const prompt = `You are simulating a realistic user in a conversation with a Glean AI agent.
+  const prompt = `You are a simulated user in a conversation with an AI agent. You are NOT the agent — you are the human user.
 
-${evalContext.simulatorContext ? `**Your role:** ${evalContext.simulatorContext}` : ''}
+${evalContext.simulatorContext ? `**Who you are:**\n${evalContext.simulatorContext}` : ''}
 
-**Original user goal:** ${evalContext.originalQuery}
+**Your original request:** ${evalContext.originalQuery}
 
-${evalContext.evalGuidance ? `**What a good outcome looks like:** ${evalContext.evalGuidance}` : ''}
+${evalContext.simulatorStrategy ? `**How to interact with this agent:**\n${evalContext.simulatorStrategy}` : ''}
+
+**Critical rules:**
+- You are the USER. You ANSWER questions, PROVIDE details, and CONFIRM or REDIRECT.
+- NEVER ask the agent questions or probe for more information — that is the agent's job, not yours.
+- Keep replies concise: 1-3 sentences. Real users don't write essays back to agents.
+- If the agent asks you to choose between options, just pick one and say why briefly.
+- If the agent delivered a substantive, actionable response to your original request, the conversation is COMPLETE.
 
 **Conversation so far:**
 ${conversationHistory}
@@ -65,17 +73,11 @@ ${conversationHistory}
 **Agent's latest message:**
 ${agentMessage}
 
-Based on this conversation, decide:
-1. Has the agent provided a substantive, complete response to the user's goal? If yes, the conversation is COMPLETE.
-2. If not, what would the user realistically say next? Consider:
-   - Answer any questions the agent asked
-   - Provide requested clarifications using realistic, specific details
-   - Keep responses concise and natural (1-3 sentences typically)
-   - Stay in character based on the original goal
+Decide: Has the agent delivered a substantive response to your request? If yes → COMPLETE. If the agent is asking you something or needs more info → CONTINUE with a brief, natural reply.
 
 Respond in this exact format:
 STATUS: COMPLETE or CONTINUE
-REPLY: [your reply if CONTINUE, or "N/A" if COMPLETE]`
+REPLY: [your concise reply if CONTINUE, or "N/A" if COMPLETE]`
 
   const resp = await fetch(`${config.gleanBackend}/rest/api/v1/chat`, {
     method: 'POST',

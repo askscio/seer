@@ -35,7 +35,8 @@ export interface SmartGeneratedCase {
   input: Record<string, string>
   query: string
   evalGuidance: string
-  simulatorContext?: string  // For autonomous/multi-turn agents
+  simulatorContext?: string   // Persona: who the simulated user is
+  simulatorStrategy?: string  // Strategy: how to interact with this agent for this case
 }
 
 export interface SmartGeneratedEvalSet {
@@ -118,18 +119,20 @@ export async function smartGenerate(req: SmartGenerateRequest): Promise<SmartGen
     onProgress?.({ phase: 'case', case: newCase, current: i + 1, total: candidateInputs.length })
   }
 
-  // Step 3: For autonomous agents, generate simulator context per case
+  // Step 3: For autonomous agents, generate simulator context + strategy per case
   if (isAutonomous) {
-    console.log(`\n3️⃣  Generating simulator context...`)
+    console.log(`\n3️⃣  Generating simulator context + strategy...`)
     for (let i = 0; i < cases.length; i++) {
       const c = cases[i]
       const displayVal = c.query.slice(0, 60)
       console.log(`   [${i + 1}/${cases.length}] ${displayVal}`)
-      onProgress?.({ phase: 'simulator', message: `Generating simulator context for "${displayVal}"...`, current: i + 1, total: cases.length })
+      onProgress?.({ phase: 'simulator', message: `Generating simulator strategy for "${displayVal}"...`, current: i + 1, total: cases.length })
 
-      cases[i].simulatorContext = await generateSimulatorContext(
+      const { context, strategy } = await generateSimulatorContextAndStrategy(
         agentName, agentDescription, c.query, c.evalGuidance
       )
+      cases[i].simulatorContext = context
+      cases[i].simulatorStrategy = strategy
     }
   }
 
@@ -280,33 +283,53 @@ Be specific and concrete. No generic advice.`
 }
 
 /**
- * Step 3: Generate simulator context for an autonomous/multi-turn agent.
- * Describes who the simulated user is and how they should respond to follow-ups.
+ * Step 3: Generate simulator context (persona) and strategy for an autonomous agent.
+ *
+ * Two outputs:
+ * - simulatorContext: WHO the user is (role, knowledge, goal, style)
+ * - simulatorStrategy: HOW to interact with this agent (what to expect, how to respond)
+ *
+ * The strategy is informed by the agent's description and the eval guidance,
+ * but translated into user-facing behavioral instructions. This prevents the
+ * simulator from mimicking the agent's behavior patterns.
  */
-async function generateSimulatorContext(
+async function generateSimulatorContextAndStrategy(
   agentName: string,
   agentDescription: string,
   query: string,
   evalGuidance: string,
-): Promise<string> {
+): Promise<{ context: string; strategy: string }> {
+  // Generate both in a single call to reduce latency
   const text = await askAgent(
-    `I'm testing a conversational Glean agent called "${agentName}".
+    `I'm building a simulated user to test a conversational AI agent called "${agentName}".
 Description: ${agentDescription}
 
-This agent is multi-turn — it may ask the user follow-up questions before giving a final answer.
+The test scenario: A user asks "${query}"
 
-The user's initial query is: "${query}"
+I need TWO things. Return them in the exact format below.
 
-What a good final outcome looks like: ${evalGuidance}
+=== PERSONA ===
+Describe who the simulated user is in 2-3 sentences:
+- Job title and team
+- What specific details they can provide if asked (real account names, metrics, dates from our company data)
+- Their communication style (concise? detailed? busy?)
 
-Write a brief "simulator context" that describes how a simulated user should behave during this conversation. Include:
-1. **Role**: Who is the user? (job title, team, what they're working on)
-2. **Knowledge**: What specific details can they provide if asked? (account names, metrics, dates, project names — use real examples from our company data)
-3. **Goal**: What outcome are they trying to achieve?
-4. **Style**: How do they communicate? (concise, detailed, impatient, collaborative)
+=== STRATEGY ===
+Describe how the simulated user should interact with this agent for this specific scenario in 3-5 bullet points:
+- What will the agent likely do first? (ask clarifying questions, propose options, dive right in, etc.)
+- For each expected agent behavior, what should the user do in response?
+- What specific information should the user provide when asked?
+- Critical: The user should NEVER ask the agent questions or probe for more — that's the agent's job. The user ANSWERS questions, PROVIDES details, and CONFIRMS or REDIRECTS. Users are concise — 1-3 sentences per reply.
 
-Keep it to 3-5 sentences. Be specific and grounded in real company context, not generic.`
+Be specific to this scenario. Use real company context where relevant.`
   )
 
-  return text.trim()
+  // Parse the two sections
+  const personaMatch = text.match(/=== PERSONA ===\s*([\s\S]*?)(?:=== STRATEGY ===|$)/i)
+  const strategyMatch = text.match(/=== STRATEGY ===\s*([\s\S]*?)$/i)
+
+  return {
+    context: personaMatch?.[1]?.trim() || text.trim(),
+    strategy: strategyMatch?.[1]?.trim() || '',
+  }
 }

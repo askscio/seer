@@ -8,7 +8,8 @@ import { Markdown } from '@/components/Markdown'
 interface TestCase {
   query: string
   evalGuidance?: string
-  simulatorContext?: string  // For multi-turn: how the simulated user should behave
+  simulatorContext?: string   // For multi-turn: who the simulated user is (persona)
+  simulatorStrategy?: string  // For multi-turn: how to interact with this agent (behavioral strategy)
   fields?: Record<string, string>  // Structured inputs for multi-field agents
   source: 'generate' | 'csv' | 'manual'
 }
@@ -155,6 +156,7 @@ export default function NewEvalSet() {
                 query: data.case.query,
                 evalGuidance: data.case.evalGuidance,
                 simulatorContext: data.case.simulatorContext,
+                simulatorStrategy: data.case.simulatorStrategy,
                 fields: Object.keys(data.case.input || {}).length > 1 ? data.case.input : undefined,
                 source: 'generate' as const,
               }])
@@ -336,6 +338,7 @@ export default function NewEvalSet() {
               evalGuidance: tc.evalGuidance || null,
               fields: tc.fields || null,
               simulatorContext: tc.simulatorContext || null,
+              simulatorStrategy: tc.simulatorStrategy || null,
             }),
           })
         )

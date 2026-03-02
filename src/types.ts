@@ -12,6 +12,16 @@ export interface AgentCapabilities {
   [key: string]: boolean | undefined
 }
 
+// Simulator strategy — how the simulated user should interact with the agent
+// Generated once per case based on agent behavior patterns and case context.
+// Distinct from evalGuidance (which is for judges) and simulatorContext (which is persona).
+export interface SimulatorStrategy {
+  expectedAgentBehavior: string  // What the agent will likely do (ask questions, propose options, etc.)
+  userResponseApproach: string   // How the simulated user should respond at each stage
+  informationToProvide: string   // Specific details the user should share when asked
+  boundaries: string             // What the user should NOT do (e.g., don't ask questions back)
+}
+
 // Single turn in a multi-turn conversation
 export interface ConversationTurn {
   role: 'user' | 'agent'

@@ -156,7 +156,7 @@ setCmd
             evalSetId: setId,
             query: testCase.query,
             evalGuidance: testCase.evalGuidance || null,
-            metadata: (hasMultiFields || testCase.simulatorContext) ? JSON.stringify({ fields: hasMultiFields ? testCase.input : undefined, simulatorContext: testCase.simulatorContext || undefined }) : null,
+            metadata: (hasMultiFields || testCase.simulatorContext || testCase.simulatorStrategy) ? JSON.stringify({ fields: hasMultiFields ? testCase.input : undefined, simulatorContext: testCase.simulatorContext || undefined, simulatorStrategy: testCase.simulatorStrategy || undefined }) : null,
             createdAt: new Date()
           })
         }
@@ -455,6 +455,7 @@ program
                 maxTurns: parseInt(opts.maxTurns) || 5,
                 evalGuidance: testCase.evalGuidance || undefined,
                 simulatorContext: caseMetadata?.simulatorContext,
+                simulatorStrategy: caseMetadata?.simulatorStrategy,
               })
             : await runAgent(set.agentId, testCase.query, testCase.id, structuredFields)
 
@@ -804,7 +805,7 @@ program
             evalSetId: setId,
             query: testCase.query,
             evalGuidance: testCase.evalGuidance || null,
-            metadata: (hasMultiFields || testCase.simulatorContext) ? JSON.stringify({ fields: hasMultiFields ? testCase.input : undefined, simulatorContext: testCase.simulatorContext || undefined }) : null,
+            metadata: (hasMultiFields || testCase.simulatorContext || testCase.simulatorStrategy) ? JSON.stringify({ fields: hasMultiFields ? testCase.input : undefined, simulatorContext: testCase.simulatorContext || undefined, simulatorStrategy: testCase.simulatorStrategy || undefined }) : null,
             createdAt: new Date()
           })
         }

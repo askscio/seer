@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm'
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { evalSetId, query, evalGuidance, context, fields, simulatorContext } = body
+    const { evalSetId, query, evalGuidance, context, fields, simulatorContext, simulatorStrategy } = body
 
     if (!evalSetId || !query) {
       return NextResponse.json(
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       query,
       evalGuidance: evalGuidance || null,
       context: context || null,
-      metadata: (fields || simulatorContext) ? JSON.stringify({ fields: fields || undefined, simulatorContext: simulatorContext || undefined }) : null,
+      metadata: (fields || simulatorContext || simulatorStrategy) ? JSON.stringify({ fields: fields || undefined, simulatorContext: simulatorContext || undefined, simulatorStrategy: simulatorStrategy || undefined }) : null,
       createdAt: new Date(),
     }).returning()
 
