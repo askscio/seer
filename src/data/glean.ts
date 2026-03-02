@@ -371,7 +371,7 @@ function extractReasoningChain(messages: RunWorkflowMessage[]): any[] {
       .map(f => f.text!.trim()) || []
 
     if (textParts.length > 0) {
-      step.text = textParts.join('\n')
+      step.text = textParts.join(' ')
       step.type = step.type || 'thinking'
     }
 

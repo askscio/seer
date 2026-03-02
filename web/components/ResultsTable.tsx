@@ -46,7 +46,7 @@ import { DIMENSIONS } from '@/lib/dimensions'
 
 export default function ResultsTable({ results }: ResultsTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
-  const [expandedTraces, setExpandedTraces] = useState<Set<string>>(new Set())
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
 
   if (results.length === 0) {
     return (
@@ -71,13 +71,13 @@ export default function ResultsTable({ results }: ResultsTableProps) {
     })
   }
 
-  const toggleTrace = (rowId: string) => {
-    setExpandedTraces((prev) => {
+  const toggleSection = (key: string) => {
+    setExpandedSections((prev) => {
       const next = new Set(prev)
-      if (next.has(rowId)) {
-        next.delete(rowId)
+      if (next.has(key)) {
+        next.delete(key)
       } else {
-        next.add(rowId)
+        next.add(key)
       }
       return next
     })
@@ -214,29 +214,9 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                 {isExpanded && (
                   <tr className="bg-surface-page">
                     <td colSpan={criteria.length + 4} className="px-4 py-4">
-                      <div className="space-y-4">
-                        {/* Full query and response — or conversation transcript */}
-                        {result.transcript ? (
-                          <ConversationThread transcript={result.transcript} />
-                        ) : (
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
-                                Full Query
-                              </label>
-                              <Markdown content={result.case?.query || ''} className="text-[#1A1A1A]" />
-                            </div>
-                            <div>
-                              <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
-                                Agent Response
-                              </label>
-                              <Markdown content={result.agentResponse} className="text-[#1A1A1A]" />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Metrics */}
-                        <div className="flex gap-6 text-sm">
+                      <div className="space-y-3">
+                        {/* Metrics bar */}
+                        <div className="flex gap-6 text-sm px-1">
                           <span className="text-[#1A1A1A]">
                             <strong>Latency:</strong> {result.latencyMs}ms
                           </span>
@@ -260,50 +240,49 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                           )}
                         </div>
 
-                        {/* Tool calls detail */}
-                        {result.toolCalls && JSON.parse(result.toolCalls).length > 0 && (
-                          <div>
-                            <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-3">
-                              Tool Calls ({JSON.parse(result.toolCalls).length})
-                            </label>
-                            <div className="space-y-2">
-                              {JSON.parse(result.toolCalls).map((tool: any, idx: number) => (
-                                <div
-                                  key={idx}
-                                  className="p-3 bg-white rounded border border-border text-sm"
-                                >
-                                  <div className="flex justify-between items-start mb-1">
-                                    <span className="font-medium text-[#1A1A1A]">
-                                      {tool.name || 'Tool Call'}
-                                    </span>
-                                    {tool.durationMs && (
-                                      <span className="text-xs text-cement">
-                                        {tool.durationMs}ms
-                                      </span>
-                                    )}
-                                  </div>
-                                  {tool.input && (
-                                    <div className="text-xs text-cement mt-1">
-                                      <strong>Input:</strong> {JSON.stringify(tool.input, null, 2)}
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                        {/* Collapsible sections — all same container style */}
 
-                        {/* Score reasoning */}
-                        <div>
-                          <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-3">
-                            Judge Reasoning
-                            <InfoIcon text="Chain-of-thought reasoning produced BEFORE the score. Research shows CoT-then-score improves correlation with human judgment by 10-20% vs score-first approaches (G-Eval, Liu et al. 2023)." wide />
-                          </label>
+                        {/* 1. Conversation Transcript (multi-turn) or Query/Response (single-turn) */}
+                        <CollapsibleSection
+                          title={result.transcript ? `Conversation Transcript` : 'Query & Response'}
+                          resultId={result.id}
+                          sectionKey="transcript"
+                          expandedSections={expandedSections}
+                          toggleSection={toggleSection}
+                        >
+                          {result.transcript ? (
+                            <ConversationThread transcript={result.transcript} />
+                          ) : (
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
+                                  Query
+                                </label>
+                                <Markdown content={result.case?.query || ''} className="text-[#1A1A1A]" />
+                              </div>
+                              <div>
+                                <label className="text-xs font-semibold text-cement uppercase tracking-wide block mb-2">
+                                  Response
+                                </label>
+                                <Markdown content={result.agentResponse} className="text-[#1A1A1A]" />
+                              </div>
+                            </div>
+                          )}
+                        </CollapsibleSection>
+
+                        {/* 2. Judge Reasoning */}
+                        <CollapsibleSection
+                          title="Judge Reasoning"
+                          resultId={result.id}
+                          sectionKey="reasoning"
+                          expandedSections={expandedSections}
+                          toggleSection={toggleSection}
+                        >
                           <div className="space-y-3">
                             {result.scores.map((score) => (
                               <div
                                 key={score.id}
-                                className="p-3 bg-white rounded border border-border"
+                                className="p-3 bg-surface-page rounded border border-border-subtle"
                               >
                                 <div className="flex justify-between items-start mb-2">
                                   <span className="text-sm font-medium text-[#1A1A1A]">
@@ -317,37 +296,24 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                               </div>
                             ))}
                           </div>
-                        </div>
+                        </CollapsibleSection>
 
-                        {/* Agent Traces (collapsed by default) */}
-                        <div className="border border-border rounded-md overflow-hidden">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleTrace(result.id)
-                            }}
-                            className="w-full px-4 py-2.5 flex items-center justify-between bg-surface-page hover:bg-glean-oatmeal-dark transition-colors"
-                          >
-                            <span className="text-xs font-semibold text-cement uppercase tracking-wide">
-                              Agent Traces
-                            </span>
-                            <span className="text-cement text-xs">
-                              {expandedTraces.has(result.id) ? '▲ Hide' : '▼ Show'}
-                            </span>
-                          </button>
-
-                          {expandedTraces.has(result.id) && (
-                            <div className="px-4 py-4 bg-white border-t border-border">
-                              {result.agentTrace ? (
-                                <AgentTraceView trace={result.agentTrace} />
-                              ) : (
-                                <p className="text-xs text-cement-light italic">
-                                  No trace data available for this run. Traces are captured for new evals going forward.
-                                </p>
-                              )}
-                            </div>
+                        {/* 3. Agent Traces */}
+                        <CollapsibleSection
+                          title="Agent Traces"
+                          resultId={result.id}
+                          sectionKey="traces"
+                          expandedSections={expandedSections}
+                          toggleSection={toggleSection}
+                        >
+                          {result.agentTrace ? (
+                            <AgentTraceView trace={result.agentTrace} />
+                          ) : (
+                            <p className="text-xs text-cement-light italic">
+                              No trace data available for this run.
+                            </p>
                           )}
-                        </div>
+                        </CollapsibleSection>
                       </div>
                     </td>
                   </tr>
@@ -357,6 +323,48 @@ export default function ResultsTable({ results }: ResultsTableProps) {
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// ===== Collapsible Section =====
+
+function CollapsibleSection({
+  title,
+  resultId,
+  sectionKey,
+  expandedSections,
+  toggleSection,
+  children,
+}: {
+  title: string
+  resultId: string
+  sectionKey: string
+  expandedSections: Set<string>
+  toggleSection: (key: string) => void
+  children: React.ReactNode
+}) {
+  const key = `${resultId}:${sectionKey}`
+  const isOpen = expandedSections.has(key)
+
+  return (
+    <div className="border border-border rounded-md overflow-hidden">
+      <button
+        onClick={(e) => { e.stopPropagation(); toggleSection(key) }}
+        className="w-full px-4 py-2.5 flex items-center justify-between bg-surface-page hover:bg-glean-oatmeal-dark transition-colors"
+      >
+        <span className="text-xs font-semibold text-cement uppercase tracking-wide">
+          {title}
+        </span>
+        <span className="text-cement text-xs">
+          {isOpen ? '▲ Hide' : '▼ Show'}
+        </span>
+      </button>
+      {isOpen && (
+        <div className="px-4 py-4 bg-white border-t border-border">
+          {children}
+        </div>
+      )}
     </div>
   )
 }
@@ -526,8 +534,6 @@ function AgentTraceView({ trace }: { trace: string }) {
 // ===== Conversation Thread (Multi-Turn) =====
 
 function ConversationThread({ transcript }: { transcript: string }) {
-  const [collapsed, setCollapsed] = useState(true)
-
   let turns: ConversationTurn[]
   try {
     turns = JSON.parse(transcript)
@@ -537,47 +543,29 @@ function ConversationThread({ transcript }: { transcript: string }) {
 
   if (!Array.isArray(turns) || turns.length === 0) return null
 
-  const agentTurns = turns.filter(t => t.role === 'agent').length
-
   return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <label className="text-xs font-semibold text-cement uppercase tracking-wide">
-          Conversation Transcript ({agentTurns} agent turn{agentTurns !== 1 ? 's' : ''})
-        </label>
-        <button
-          onClick={(e) => { e.stopPropagation(); setCollapsed(!collapsed) }}
-          className="text-[10px] text-glean-blue hover:text-glean-blue-hover transition-colors"
-        >
-          {collapsed ? '▼ Expand' : '▲ Collapse'}
-        </button>
-      </div>
-
-      {!collapsed && (
-        <div className="bg-surface-page rounded-lg border border-border p-4 space-y-3 max-h-[32rem] overflow-y-auto">
-          {turns.map((turn, i) => (
-            <div key={i} className={`flex ${turn.role === 'agent' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] px-4 py-2.5 ${
-                turn.role === 'agent'
-                  ? 'bg-glean-blue-light rounded-l-xl rounded-tr-xl'
-                  : 'bg-white border border-border rounded-r-xl rounded-tl-xl'
-              }`}>
-                <div className="text-[10px] text-cement mb-1 font-medium uppercase tracking-wide tracking-wide">
-                  {turn.role === 'user' && i === 0 ? 'User' : turn.role === 'user' ? 'Simulated User' : 'Agent'}
-                </div>
-                <Markdown content={turn.content} className="text-sm" />
-                {turn.toolCalls && turn.toolCalls.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-border-subtle flex items-center gap-1">
-                    <span className="text-[10px] text-cement">
-                      {turn.toolCalls.length} tool{turn.toolCalls.length > 1 ? 's' : ''}: {turn.toolCalls.map((t: any) => t.name).join(', ')}
-                    </span>
-                  </div>
-                )}
-              </div>
+    <div className="space-y-3 max-h-[32rem] overflow-y-auto">
+      {turns.map((turn, i) => (
+        <div key={i} className={`flex ${turn.role === 'agent' ? 'justify-end' : 'justify-start'}`}>
+          <div className={`max-w-[80%] px-4 py-2.5 ${
+            turn.role === 'agent'
+              ? 'bg-glean-blue-light rounded-l-xl rounded-tr-xl'
+              : 'bg-surface-page border border-border rounded-r-xl rounded-tl-xl'
+          }`}>
+            <div className="text-[10px] text-cement mb-1 font-medium uppercase tracking-wide">
+              {turn.role === 'user' && i === 0 ? 'User' : turn.role === 'user' ? 'Simulated User' : 'Agent'}
             </div>
-          ))}
+            <Markdown content={turn.content} className="text-sm" />
+            {turn.toolCalls && turn.toolCalls.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-border-subtle flex items-center gap-1">
+                <span className="text-[10px] text-cement">
+                  {turn.toolCalls.length} tool{turn.toolCalls.length > 1 ? 's' : ''}: {turn.toolCalls.map((t: any) => t.name).join(', ')}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      ))}
     </div>
   )
 }
