@@ -126,12 +126,23 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
                 )}
                 {(() => {
                   const meta = testCase.metadata ? JSON.parse(testCase.metadata) : null
-                  return meta?.simulatorContext ? (
-                    <div className="mt-2 pt-2 border-t border-border-subtle">
-                      <span className="text-[10px] font-medium text-cement uppercase tracking-wide">Simulator Context</span>
-                      <p className="text-xs text-cement mt-0.5 leading-relaxed">{meta.simulatorContext}</p>
+                  if (!meta?.simulatorContext && !meta?.simulatorStrategy) return null
+                  return (
+                    <div className="mt-2 pt-2 border-t border-border-subtle space-y-2">
+                      {meta.simulatorContext && (
+                        <div>
+                          <span className="text-[10px] font-medium text-cement uppercase tracking-wide">Simulator Persona</span>
+                          <p className="text-xs text-cement mt-0.5 leading-relaxed">{meta.simulatorContext}</p>
+                        </div>
+                      )}
+                      {meta.simulatorStrategy && (
+                        <div>
+                          <span className="text-[10px] font-medium text-[#343CED]/70 uppercase tracking-wide">Simulator Strategy</span>
+                          <p className="text-xs text-cement mt-0.5 leading-relaxed whitespace-pre-line">{meta.simulatorStrategy}</p>
+                        </div>
+                      )}
                     </div>
-                  ) : null
+                  )
                 })()}
               </td>
               <td className="px-4 py-3 text-right">
