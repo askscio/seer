@@ -12,7 +12,8 @@ bun install
 cp .env.example .env
 # Add your GLEAN_API_KEY (needs chat + search + agents scopes)
 
-bun run db:push
+# Initialize the database (runs automatically on first CLI command)
+bun run src/cli.ts list sets
 ```
 
 ### Web UI
@@ -91,7 +92,7 @@ bun run src/cli.ts list sets
 bun run src/cli.ts generate <agent-id> --count <n>
 
 # Run & results
-bun run src/cli.ts run <set-id> [--deep] [--multi-judge]
+bun run src/cli.ts run <set-id> [--deep] [--multi-judge] [--multi-turn] [--max-turns 5]
 bun run src/cli.ts results <run-id>
 bun run src/cli.ts list runs
 ```
@@ -102,7 +103,8 @@ bun run src/cli.ts list runs
 CLI ←→ Shared SQLite ←→ Web UI
               ↓
         Eval Engine
-      ├── Agent Runner    (runworkflow API)
+      ├── Agent Runner    (runworkflow for workflow agents, Chat API for autonomous)
+      ├── Simulator       (LLM-based simulated user for multi-turn conversations)
       ├── Smart Generator (ADVANCED agent + company tools)
       ├── Judge           (4-call architecture, Opus 4.6)
       └── Metrics         (latency, tool calls)
