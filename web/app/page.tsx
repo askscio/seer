@@ -9,10 +9,13 @@ interface EvalSetWithStats {
   name: string
   description: string
   agentId: string
+  agentType: string | null
   createdAt: Date
   caseCount: number
+  runCount: number
   lastRunDate: Date | null
   lastScore: number | null
+  avgScore: number | null
 }
 
 async function getEvalSetsWithStats(): Promise<EvalSetWithStats[]> {
@@ -34,6 +37,14 @@ async function getEvalSetsWithStats(): Promise<EvalSetWithStats[]> {
         .limit(1)
         .then((rows) => rows[0] || null)
 
+      // All completed runs for this set
+      const allRuns = await db
+        .select()
+        .from(evalRuns)
+        .where(eq(evalRuns.evalSetId, set.id))
+
+      const completedRuns = allRuns.filter(r => r.status === 'completed')
+
       let lastScore = null
       if (lastRun) {
         const results = await db
@@ -50,11 +61,34 @@ async function getEvalSetsWithStats(): Promise<EvalSetWithStats[]> {
           : null
       }
 
+      // Average score across ALL completed runs
+      let avgScore = null
+      if (completedRuns.length > 0) {
+        const allRunScores: number[] = []
+        for (const run of completedRuns) {
+          const results = await db
+            .select()
+            .from(evalResults)
+            .where(eq(evalResults.runId, run.id))
+          const scores = results
+            .map(r => r.overallScore)
+            .filter((s): s is number => s !== null && s !== undefined)
+          if (scores.length > 0) {
+            allRunScores.push(scores.reduce((sum, s) => sum + s, 0) / scores.length)
+          }
+        }
+        avgScore = allRunScores.length > 0
+          ? allRunScores.reduce((sum, s) => sum + s, 0) / allRunScores.length
+          : null
+      }
+
       return {
         ...set,
         caseCount,
+        runCount: completedRuns.length,
         lastRunDate: lastRun?.completedAt || null,
         lastScore,
+        avgScore,
       }
     })
   )
@@ -141,6 +175,22 @@ export default async function Dashboard() {
                           }`}
                         >
                           {set.lastScore.toFixed(1)}/10
+                        </span>
+                      </div>
+                    )}
+                    {set.avgScore !== null && set.runCount > 1 && (
+                      <div className="flex justify-between">
+                        <span className="text-cement">Avg ({set.runCount} runs)</span>
+                        <span
+                          className={`font-medium tabular-nums text-xs ${
+                            set.avgScore >= 7
+                              ? 'text-score-success'
+                              : set.avgScore >= 4
+                              ? 'text-score-warning'
+                              : 'text-score-fail'
+                          }`}
+                        >
+                          {set.avgScore.toFixed(1)}/10
                         </span>
                       </div>
                     )}

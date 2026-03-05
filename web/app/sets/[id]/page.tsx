@@ -63,6 +63,14 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
 
   const latestRun = evalSet.runs[0] || null
 
+  // Average score across all runs with valid scores
+  const runScores = evalSet.runs
+    .map(r => r.overallScore)
+    .filter((s): s is number => s !== null && s !== undefined)
+  const avgScore = runScores.length > 0
+    ? runScores.reduce((sum, s) => sum + s, 0) / runScores.length
+    : null
+
   return (
     <div>
       {/* Breadcrumb + Header */}
@@ -152,6 +160,18 @@ export default async function EvalSetDetail({ params }: { params: { id: string }
                 {latestRun.overallScore.toFixed(1)}
               </span>
             </div>
+            {avgScore !== null && runScores.length > 1 && (
+              <div className="text-center px-4 border-l border-border-subtle">
+                <span className={`text-lg font-semibold tabular-nums ${
+                  avgScore >= 7 ? 'text-score-success' : avgScore >= 4 ? 'text-score-warning' : 'text-score-fail'
+                }`}>
+                  {avgScore.toFixed(1)}
+                </span>
+                <p className="text-[10px] text-cement uppercase tracking-wide mt-0.5">
+                  Avg ({runScores.length} runs)
+                </p>
+              </div>
+            )}
             <div className="flex-1">
               {latestRun.criteria.length > 0 && (
                 <div className="flex flex-wrap gap-2">
