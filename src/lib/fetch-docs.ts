@@ -37,7 +37,7 @@ export async function fetchSourceDocContent(
     .filter((d: any, i: number, arr: any[]) =>
       arr.findIndex((x: any) => x.url === d.url) === i  // deduplicate by URL
     )
-    .slice(0, 8)
+    // No artificial cap — the judge should see exactly what the agent saw
 
   if (docs.length === 0) return []
 
@@ -91,18 +91,16 @@ async function fetchDocsByUrl(
         return { title: d.title, content: '[Content not retrievable]' }
       }
 
-      // Extract content from fullTextList
+      // Extract content from fullTextList — no truncation, judge sees full content
       const fullText = docData.content?.fullTextList
       if (fullText && Array.isArray(fullText) && fullText.length > 0) {
-        // Join text sections, cap at ~4000 chars to keep judge context focused
-        const joined = fullText.join('\n').slice(0, 4000)
-        return { title: d.title, content: joined }
+        return { title: d.title, content: fullText.join('\n') }
       }
 
       // Fallback to body text
       const body = docData.body?.text
       if (body) {
-        return { title: d.title, content: body.slice(0, 4000) }
+        return { title: d.title, content: body }
       }
 
       return { title: d.title, content: '[Content not retrievable]' }

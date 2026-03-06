@@ -376,7 +376,7 @@ async function judgeFactuality(
     .flatMap(s => s.documentsRead)
     .map((d: any) => d.title || d.url)
     .filter(Boolean)
-    .slice(0, 20) || []
+    || []
 
   const sourcesBlock = agentSources.length > 0
     ? `\n<agent_sources>\nThe agent retrieved these documents during execution:\n${agentSources.map((s: string) => `- ${s}`).join('\n')}\n</agent_sources>\n`
