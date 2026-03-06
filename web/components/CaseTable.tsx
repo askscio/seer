@@ -24,14 +24,28 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editQuery, setEditQuery] = useState('')
   const [editGuidance, setEditGuidance] = useState('')
+  const [editSimContext, setEditSimContext] = useState('')
+  const [editSimStrategy, setEditSimStrategy] = useState('')
 
   const handleEdit = (testCase: EvalCase) => {
     setEditingId(testCase.id)
     setEditQuery(testCase.query)
     setEditGuidance(testCase.evalGuidance || '')
+    const meta = testCase.metadata ? JSON.parse(testCase.metadata) : null
+    setEditSimContext(meta?.simulatorContext || '')
+    setEditSimStrategy(meta?.simulatorStrategy || '')
   }
 
-  const handleSave = async (id: string) => {
+  const handleSave = async (id: string, currentMetadata: string | null) => {
+    // Merge simulator fields into existing metadata
+    const existingMeta = currentMetadata ? JSON.parse(currentMetadata) : {}
+    const updatedMeta = {
+      ...existingMeta,
+      simulatorContext: editSimContext || undefined,
+      simulatorStrategy: editSimStrategy || undefined,
+    }
+    const hasMetadata = Object.values(updatedMeta).some(v => v !== undefined)
+
     try {
       const response = await fetch('/api/cases', {
         method: 'PATCH',
@@ -40,6 +54,7 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
           id,
           query: editQuery,
           evalGuidance: editGuidance || null,
+          metadata: hasMetadata ? JSON.stringify(updatedMeta) : null,
         }),
       })
 
@@ -124,32 +139,61 @@ export default function CaseTable({ cases, evalSetId }: CaseTableProps) {
                 ) : (
                   <span className="text-sm text-gray-400 italic">Not specified</span>
                 )}
-                {(() => {
-                  const meta = testCase.metadata ? JSON.parse(testCase.metadata) : null
-                  if (!meta?.simulatorContext && !meta?.simulatorStrategy) return null
-                  return (
+                {editingId === testCase.id ? (
+                  /* Edit mode: show editable simulator fields */
+                  (editSimContext || editSimStrategy) ? (
                     <div className="mt-2 pt-2 border-t border-border-subtle space-y-2">
-                      {meta.simulatorContext && (
-                        <div>
-                          <span className="text-[10px] font-medium text-cement uppercase tracking-wide">Simulator Persona</span>
-                          <p className="text-xs text-cement mt-0.5 leading-relaxed">{meta.simulatorContext}</p>
-                        </div>
-                      )}
-                      {meta.simulatorStrategy && (
-                        <div>
-                          <span className="text-[10px] font-medium text-[#343CED]/70 uppercase tracking-wide">Simulator Strategy</span>
-                          <p className="text-xs text-cement mt-0.5 leading-relaxed whitespace-pre-line">{meta.simulatorStrategy}</p>
-                        </div>
-                      )}
+                      <div>
+                        <span className="text-[10px] font-medium text-cement uppercase tracking-wide">Simulator Persona</span>
+                        <textarea
+                          value={editSimContext}
+                          onChange={(e) => setEditSimContext(e.target.value)}
+                          className="w-full mt-1 px-2 py-1 border border-glean-blue rounded text-xs focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
+                          rows={2}
+                          placeholder="Who is the simulated user?"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-medium text-[#343CED]/70 uppercase tracking-wide">Simulator Strategy</span>
+                        <textarea
+                          value={editSimStrategy}
+                          onChange={(e) => setEditSimStrategy(e.target.value)}
+                          className="w-full mt-1 px-2 py-1 border border-glean-blue rounded text-xs focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
+                          rows={3}
+                          placeholder="How should the simulated user interact with this agent?"
+                        />
+                      </div>
                     </div>
-                  )
-                })()}
+                  ) : null
+                ) : (
+                  /* View mode: display simulator fields */
+                  (() => {
+                    const meta = testCase.metadata ? JSON.parse(testCase.metadata) : null
+                    if (!meta?.simulatorContext && !meta?.simulatorStrategy) return null
+                    return (
+                      <div className="mt-2 pt-2 border-t border-border-subtle space-y-2">
+                        {meta.simulatorContext && (
+                          <div>
+                            <span className="text-[10px] font-medium text-cement uppercase tracking-wide">Simulator Persona</span>
+                            <p className="text-xs text-cement mt-0.5 leading-relaxed">{meta.simulatorContext}</p>
+                          </div>
+                        )}
+                        {meta.simulatorStrategy && (
+                          <div>
+                            <span className="text-[10px] font-medium text-[#343CED]/70 uppercase tracking-wide">Simulator Strategy</span>
+                            <p className="text-xs text-cement mt-0.5 leading-relaxed whitespace-pre-line">{meta.simulatorStrategy}</p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()
+                )}
               </td>
               <td className="px-4 py-3 text-right">
                 {editingId === testCase.id ? (
                   <div className="flex gap-2 justify-end">
                     <button
-                      onClick={() => handleSave(testCase.id)}
+                      onClick={() => handleSave(testCase.id, testCase.metadata)}
                       className="text-sm text-score-success hover:text-green-700 font-medium"
                     >
                       Save

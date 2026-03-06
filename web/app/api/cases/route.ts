@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json()
-    const { id, query, evalGuidance, context } = body
+    const { id, query, evalGuidance, context, metadata } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Missing case ID' }, { status: 400 })
@@ -54,6 +54,7 @@ export async function PATCH(request: Request) {
     if (query !== undefined) updates.query = query
     if (evalGuidance !== undefined) updates.evalGuidance = evalGuidance
     if (context !== undefined) updates.context = context
+    if (metadata !== undefined) updates.metadata = metadata
 
     const updated = await db
       .update(evalCases)
