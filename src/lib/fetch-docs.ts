@@ -1,19 +1,17 @@
 /**
  * Source document content retrieval for faithfulness judging
  *
- * Two strategies:
- * 1. Primary: Use ADVANCED Chat API to summarize source docs in a single call.
- *    This avoids the search API's Slack federated search rate limits (429/504)
- *    that block all results when Slack's connector fails.
- * 2. Fallback: Individual search API calls with retry (if Chat API fails).
+ * Fetches actual document content for sources identified in the agent's
+ * reasoning chain. Uses Glean's getdocuments API to read indexed content
+ * directly by URL — no search federation, no Slack rate limit issues.
  *
- * Why not search API directly? Glean's search federates across all datasources
- * including Slack. The Slack RTS connector frequently rate-limits or times out,
- * causing the ENTIRE search to return 0 results — even for gdrive/confluence docs.
+ * Flow:
+ * 1. Extract doc URLs from the agent's reasoning chain
+ * 2. Batch fetch via POST /rest/api/v1/getdocuments with DOCUMENT_CONTENT
+ * 3. Return { title, content }[] for the faithfulness judge
  */
 
 import { config } from './config'
-import { extractContentWithFallback, type GleanResponse } from './extract-content'
 
 export interface SourceDoc {
   title: string
@@ -21,171 +19,98 @@ export interface SourceDoc {
 }
 
 /**
- * Extract document titles from reasoning chain and fetch their content.
+ * Extract document URLs from reasoning chain and fetch their content
+ * via the getdocuments API (direct content read, no search federation).
  *
- * Primary: asks ADVANCED agent to summarize the listed docs (single API call,
- * no federated search rate limit issues).
- * Fallback: sequential search API calls with retry + timeoutMillis.
+ * Caps at 8 documents. Batches into a single API call.
  */
 export async function fetchSourceDocContent(
   reasoningChain: any[] | undefined
 ): Promise<SourceDoc[]> {
   if (!reasoningChain || reasoningChain.length === 0) return []
 
-  // Extract unique document titles from the reasoning chain
-  const titles = reasoningChain
+  // Extract unique documents with URLs from the reasoning chain
+  const docs = reasoningChain
     .filter(s => s.documentsRead)
     .flatMap(s => s.documentsRead)
-    .map((d: any) => d.title)
-    .filter((t: string | undefined): t is string => !!t)
-    .filter((t, i, arr) => arr.indexOf(t) === i)
+    .filter((d: any) => d.url && d.title)
+    .filter((d: any, i: number, arr: any[]) =>
+      arr.findIndex((x: any) => x.url === d.url) === i  // deduplicate by URL
+    )
     .slice(0, 8)
 
-  if (titles.length === 0) return []
+  if (docs.length === 0) return []
 
-  // Primary: batch fetch via Chat API
-  const chatResult = await fetchViaChat(titles)
-  if (chatResult.length > 0) {
-    const retrieved = chatResult.filter(d => !d.content.includes('[Content not retrievable]'))
-    if (retrieved.length > 0) {
-      console.log(`  → Docs fetched: ${retrieved.length}/${titles.length} via Chat API`)
-    }
-    return chatResult
-  }
-
-  // Fallback: sequential search API calls
-  console.log(`  → Chat API doc fetch failed, falling back to search API...`)
-  const results: SourceDoc[] = []
-  for (let i = 0; i < titles.length; i++) {
-    const doc = await fetchSingleDoc(titles[i])
-    results.push(doc)
-    if (i < titles.length - 1) await new Promise(r => setTimeout(r, 500))
-  }
+  // Batch fetch all docs in a single API call
+  const results = await fetchDocsByUrl(docs)
 
   const retrieved = results.filter(d => !d.content.includes('[Content not retrievable]'))
-  if (retrieved.length > 0) {
-    console.log(`  → Docs fetched: ${retrieved.length}/${titles.length} via search API`)
+  if (retrieved.length > 0 || results.length > 0) {
+    console.log(`  → Docs fetched: ${retrieved.length}/${docs.length} retrieved`)
   }
 
   return results
 }
 
 /**
- * Fetch doc content via ADVANCED Chat API in a single call.
- * The agent searches internally, bypassing federated search rate limits.
+ * Fetch document content by URL using the getdocuments API.
+ * Single batch call — no search federation, no Slack rate limits.
  */
-async function fetchViaChat(titles: string[]): Promise<SourceDoc[]> {
+async function fetchDocsByUrl(
+  docs: Array<{ title: string; url: string }>
+): Promise<SourceDoc[]> {
   try {
-    const titleList = titles.map((t, i) => `${i + 1}. "${t}"`).join('\n')
-
-    const resp = await fetch(`${config.gleanBackend}/rest/api/v1/chat`, {
+    const resp = await fetch(`${config.gleanBackend}/rest/api/v1/getdocuments`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.gleanApiKey}`,
       },
       body: JSON.stringify({
-        messages: [{ fragments: [{ text:
-          `I need brief content summaries of these specific company documents for a quality review. For each document, provide 3-5 sentences summarizing the key content. If you cannot find a document, say "[Content not retrievable]" for that entry.
-
-Documents:
-${titleList}
-
-Respond in this exact format for each:
---- [document title] ---
-[3-5 sentence summary of the document's content]` }] }],
-        agentConfig: {
-          agent: 'ADVANCED',
-          toolSets: { enableCompanyTools: true },
-        },
-        saveChat: false,
-        timeoutMillis: 60000,
+        documentSpecs: docs.map(d => ({ url: d.url })),
+        includeFields: ['DOCUMENT_CONTENT'],
       }),
-      signal: AbortSignal.timeout(65000),
+      signal: AbortSignal.timeout(30000),
     })
 
     if (!resp.ok) {
-      if (process.env.SEER_DEBUG) console.error(`  [DEBUG] Chat doc fetch HTTP ${resp.status}`)
-      return []
-    }
-
-    const data = await resp.json() as GleanResponse
-    const text = extractContentWithFallback(data)
-    if (!text) {
-      if (process.env.SEER_DEBUG) console.error(`  [DEBUG] Chat doc fetch: no content extracted`)
-      return []
-    }
-
-    // Parse the structured response
-    return titles.map(title => {
-      // Find the section for this title
-      const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const pattern = new RegExp(`---\\s*${escapedTitle}\\s*---\\s*([\\s\\S]*?)(?=---\\s|$)`, 'i')
-      const match = text.match(pattern)
-
-      // Also try a looser match by title substring
-      if (!match) {
-        const loosePattern = new RegExp(`${escapedTitle.slice(0, 30)}[\\s\\S]*?\\n([\\s\\S]*?)(?=---\\s|$)`, 'i')
-        const looseMatch = text.match(loosePattern)
-        return {
-          title,
-          content: looseMatch?.[1]?.trim() || '[Content not retrievable]',
-        }
+      if (process.env.SEER_DEBUG) {
+        console.error(`  [DEBUG] getdocuments error: ${resp.status}`)
       }
-
-      return {
-        title,
-        content: match[1]?.trim() || '[Content not retrievable]',
-      }
-    })
-  } catch {
-    return []
-  }
-}
-
-/**
- * Fallback: fetch content for a single document via search API.
- */
-async function fetchSingleDoc(title: string): Promise<SourceDoc> {
-  try {
-    const resp = await fetch(`${config.gleanBackend}/rest/api/v1/search`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.gleanApiKey}`,
-      },
-      body: JSON.stringify({
-        query: title,
-        pageSize: 1,
-        timeoutMillis: 10000,
-      }),
-      signal: AbortSignal.timeout(15000),
-    })
-
-    if (!resp.ok) return { title, content: '[Content not retrievable]' }
+      return docs.map(d => ({ title: d.title, content: '[Content not retrievable]' }))
+    }
 
     const data = await resp.json() as any
-    const results = data.results || []
-    if (results.length === 0) return { title, content: '[Content not retrievable]' }
 
-    const topResult = results[0]
-    const snippets: string[] = []
+    // Response format: { documents: { [url]: { content: { fullTextList: [...] }, ... } } }
+    const docMap = data.documents || {}
 
-    if (topResult.snippets) {
-      for (const snippet of topResult.snippets) {
-        if (snippet.snippet?.text) snippets.push(snippet.snippet.text)
+    return docs.map(d => {
+      const docData = docMap[d.url]
+      if (!docData) {
+        return { title: d.title, content: '[Content not retrievable]' }
       }
-    }
 
-    if (topResult.document?.body?.text) {
-      snippets.push(topResult.document.body.text)
-    }
+      // Extract content from fullTextList
+      const fullText = docData.content?.fullTextList
+      if (fullText && Array.isArray(fullText) && fullText.length > 0) {
+        // Join text sections, cap at ~4000 chars to keep judge context focused
+        const joined = fullText.join('\n').slice(0, 4000)
+        return { title: d.title, content: joined }
+      }
 
-    return {
-      title,
-      content: snippets.length > 0 ? snippets.join('\n\n') : '[Content not retrievable]',
+      // Fallback to body text
+      const body = docData.body?.text
+      if (body) {
+        return { title: d.title, content: body.slice(0, 4000) }
+      }
+
+      return { title: d.title, content: '[Content not retrievable]' }
+    })
+  } catch (err) {
+    if (process.env.SEER_DEBUG) {
+      console.error(`  [DEBUG] getdocuments exception:`, err)
     }
-  } catch {
-    return { title, content: '[Content not retrievable]' }
+    return docs.map(d => ({ title: d.title, content: '[Content not retrievable]' }))
   }
 }
