@@ -176,7 +176,7 @@ export default function EvalConfigSection({ evalSetId, hasCases, agentType }: Ev
         <div>
           <label className="text-xs font-medium text-cement uppercase tracking-wide block mb-3">
             Evaluation Mode
-            <InfoIcon text="Each mode groups criteria into independent judge calls by type. Coverage call sees query + eval guidance. Quality call sees query + response only (isolated from eval guidance). Faithfulness call sees query + agent trace + pre-fetched document content. Factuality call sees query + response and independently searches all company data. Calls run in sequence per case, but each call is independent — they don't share context or influence each other's scores." wide />
+            <InfoIcon text="Each mode runs independent judge calls by type. Call 1 (Coverage): query + eval guidance + response. Call 2 (Quality): query + response only — isolated from eval guidance to prevent anchoring. Call 3 (Faithfulness): query + response + full document content fetched by URL from the agent's trace. Call 4 (Factuality, deep only): an independent ADVANCED agent iteratively searches company data to verify claims. Each call is isolated — they don't share context." wide />
           </label>
           <div className="grid grid-cols-2 gap-3">
             {(Object.entries(EVAL_MODES) as [EvalMode, typeof EVAL_MODES.quick][]).map(([key, m]) => (

@@ -78,7 +78,7 @@ Evaluate information density, not length. A concise correct answer is BETTER tha
     weight: 0.7,
   },
 
-  // ===== FAITHFULNESS (source-grounded — Call 2) =====
+  // ===== FAITHFULNESS (source-grounded — Call 3) =====
 
   {
     id: 'groundedness',
@@ -119,7 +119,7 @@ A response that says "no data found" when no documents were retrieved is CORRECT
     weight: 0.8,
   },
 
-  // ===== FACTUALITY (search-verified — Call 3, optional) =====
+  // ===== FACTUALITY (search-verified — Call 4, deep mode only) =====
 
   {
     id: 'factual_accuracy',
