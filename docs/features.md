@@ -60,7 +60,7 @@
 - `prose-seer` markdown class with Glean-toned variables
 
 ### Configuration
-- Unified `GLEAN_API_KEY` (chat + search + agents scopes)
+- Unified `GLEAN_API_KEY` (chat + search + agents + documents scopes)
 - Config priority: data/settings.json → .env → error
 - Legacy key fallback (GLEAN_CHAT_API_KEY, GLEAN_AGENT_API_KEY)
 

@@ -38,7 +38,7 @@ Eval Engine
 
 ## API Integration
 
-**Single API key** (`GLEAN_API_KEY`) with chat + search + agents scopes.
+**Single API key** (`GLEAN_API_KEY`) with chat + search + agents + documents scopes.
 
 | Endpoint | Purpose |
 |----------|---------|

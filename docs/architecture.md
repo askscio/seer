@@ -48,7 +48,7 @@
 Executes Glean agents and collects responses with trace metadata.
 
 - **Endpoint:** `POST /rest/api/v1/runworkflow`
-- **Auth:** Bearer token (CHAT-scoped, unified `GLEAN_API_KEY`)
+- **Auth:** Bearer token (unified `GLEAN_API_KEY` with chat + search + agents + documents scopes)
 - **Payload format:** `{ workflowId, fields/messages, stream: false, enableTrace: true }`
 - **Returns:** response text (CONTENT messages), traceId, tool calls, reasoning chain (UPDATE messages)
 - **Schema detection:** fetches `/rest/api/v1/agents/{id}/schemas` to determine form vs chat input
@@ -83,7 +83,7 @@ Scores agent responses using LLM-as-judge via Glean Chat.
 ### Config (`src/lib/config.ts`)
 
 - **Priority:** `data/settings.json` → `.env` → error
-- **Single key:** `GLEAN_API_KEY` (chat + search + agents scopes)
+- **Single key:** `GLEAN_API_KEY` (chat + search + agents + documents scopes)
 - **Legacy fallback:** `GLEAN_CHAT_API_KEY`, `GLEAN_AGENT_API_KEY`
 - **Settings UI:** Web page at `/settings` reads/writes `data/settings.json`
 

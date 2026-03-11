@@ -2,7 +2,7 @@
  * Configuration loader
  * Priority: data/settings.json → .env → error
  *
- * Uses a single GLEAN_API_KEY with chat + search + agents scopes.
+ * Uses a single GLEAN_API_KEY with chat + search + agents + documents scopes.
  * Falls back to legacy GLEAN_CHAT_API_KEY / GLEAN_AGENT_API_KEY if present.
  */
 
@@ -10,7 +10,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
 export interface Config {
-  gleanApiKey: string     // Unified key (chat + search + agents)
+  gleanApiKey: string     // Unified key (chat + search + agents + documents)
   gleanBackend: string
   gleanInstance: string
 }

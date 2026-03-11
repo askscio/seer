@@ -94,7 +94,7 @@ export default function SettingsPage() {
       key: 'gleanApiKey' as keyof Settings,
       label: 'API Key',
       placeholder: 'Your Glean API key',
-      description: 'Needs chat + search + agents scopes. Create at Glean Settings > API > REST API tokens.',
+      description: 'Needs chat + search + agents + documents scopes. Create at Glean Settings > API > REST API tokens.',
       type: 'password',
     },
   ]

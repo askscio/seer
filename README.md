@@ -10,7 +10,7 @@ Seer evaluates AI agents built in Glean's Agent Builder. It runs agents, scores 
 bun install
 
 cp .env.example .env
-# Add your GLEAN_API_KEY (needs chat + search + agents scopes)
+# Add your GLEAN_API_KEY (needs chat + search + agents + documents scopes)
 
 # Initialize the database (runs automatically on first CLI command)
 bun run src/cli.ts list sets
