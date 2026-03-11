@@ -387,11 +387,28 @@ program
       // Parse criteria
       const criteriaIds = opts.criteria.split(',').map((s: string) => s.trim())
       if (opts.deep) criteriaIds.push('factual_accuracy')
-      const criteria = criteriaIds.map((id: string) => {
+      const criteria = await Promise.all(criteriaIds.map(async (id: string) => {
         const c = getCriterion(id)
-        if (!c) throw new Error(`Unknown criterion: ${id}. Available: topical_coverage, response_quality, groundedness, hallucination_risk, factual_accuracy, latency, tool_call_count`)
-        return c
-      })
+        if (c) return c
+
+        // Check DB for custom criteria
+        const custom = await db.select().from(evalCriteria).where(eq(evalCriteria.id, id))
+        if (custom[0]) {
+          const scale = custom[0].scaleConfig ? JSON.parse(custom[0].scaleConfig) : undefined
+          return {
+            id: custom[0].id,
+            name: custom[0].name,
+            description: custom[0].description || '',
+            rubric: custom[0].rubric,
+            scoreType: custom[0].scoreType as 'categorical' | 'binary' | 'metric',
+            judgeCall: 'custom' as const,
+            scaleConfig: scale,
+            weight: custom[0].weight,
+          }
+        }
+
+        throw new Error(`Unknown criterion: ${id}`)
+      }))
 
       const judgeModelIds = opts.multiJudge
         ? JUDGE_MODELS.map(m => m.id)
