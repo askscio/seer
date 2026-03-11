@@ -139,6 +139,7 @@ async function runJudgePipeline(
   const faithfulnessCriteria = criteria.filter(c => c.judgeCall === 'faithfulness')
   const factualityCriteria = criteria.filter(c => c.judgeCall === 'factuality')
   const metricCriteria = criteria.filter(c => c.judgeCall === 'metric')
+  const customCriteria = criteria.filter(c => c.judgeCall === 'custom')
 
   // Metrics: direct extraction, no API call
   for (const c of metricCriteria) {
@@ -181,6 +182,11 @@ async function runJudgePipeline(
   // Call 4: Factuality — ADVANCED agent with live search
   for (const c of factualityCriteria) {
     scores.push(await judgeFactuality(c, query, judgeResponse, agentResult, model))
+  }
+
+  // Custom dimensions — each gets its own quality-style call with the user's rubric
+  if (customCriteria.length > 0) {
+    scores.push(...await judgeCustomBatch(customCriteria, query, judgeResponse, model))
   }
 
   return scores
@@ -415,6 +421,47 @@ ${response}
 
   const text = await callJudgeWithTools(prompt, model.id)
   return parseScore(text, criterion, model.name)
+}
+
+// ===== Custom Dimensions (user-defined rubric, quality-style call) =====
+
+async function judgeCustomBatch(
+  criteria: CriterionDefinition[],
+  query: string,
+  response: string,
+  model: { id: string; name: string },
+): Promise<JudgeScore[]> {
+  const criteriaBlock = criteria.map(c =>
+    `=== ${c.name.toUpperCase()} ===\n${c.description}\n\n${c.rubric}`
+  ).join('\n\n')
+
+  const scoreFormat = criteria.map(c => {
+    const categories = c.scaleConfig?.categories?.join(' / ') || 'value'
+    return `<${c.id}_reasoning>[Your analysis]</${c.id}_reasoning>\n<${c.id}>[${categories}]</${c.id}>`
+  }).join('\n\n')
+
+  const prompt = `You are an expert evaluator assessing an AI agent's response using custom evaluation criteria.
+
+${criteriaBlock}
+
+=== MATERIAL ===
+
+<query>
+${query}
+</query>
+
+<actual_response>
+${response}
+</actual_response>
+
+=== INSTRUCTIONS ===
+
+Evaluate the response against each criterion using the rubric provided. Be specific and cite examples from the response.
+
+${scoreFormat}`
+
+  const text = await callJudge(prompt, model.id)
+  return criteria.map(c => parseScore(text, c, model.name))
 }
 
 // ===== Multi-judge aggregation =====

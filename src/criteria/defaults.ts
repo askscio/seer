@@ -17,7 +17,7 @@ export interface CriterionDefinition {
   description: string
   rubric: string
   scoreType: 'binary' | 'categorical' | 'metric'
-  judgeCall: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'metric'
+  judgeCall: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'metric' | 'custom'
   scaleConfig?: {
     categories?: string[]
     categoryValues?: Record<string, number>  // Map categories to numeric values for aggregation

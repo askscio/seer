@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { db, evalSets, evalCases, evalRuns, evalResults, evalScores } from '@/lib/db'
+import { db, evalSets, evalCases, evalCriteria, evalRuns, evalResults, evalScores } from '@/lib/db'
 import { eq, inArray } from 'drizzle-orm'
 
 // Import from CLI code
@@ -37,12 +37,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No test cases found' }, { status: 400 })
     }
 
-    // Resolve criteria definitions
-    const criteriaObjs = criteria.map((id: string) => {
+    // Resolve criteria definitions (defaults + custom from DB)
+    const criteriaObjs = await Promise.all(criteria.map(async (id: string) => {
       const criterion = getCriterion(id)
-      if (!criterion) throw new Error(`Unknown criterion: ${id}`)
-      return criterion
-    })
+      if (criterion) return criterion
+
+      // Check DB for custom criteria
+      const custom = await db.select().from(evalCriteria).where(eq(evalCriteria.id, id)).limit(1)
+      if (custom[0]) {
+        const scale = custom[0].scaleConfig ? JSON.parse(custom[0].scaleConfig) : undefined
+        return {
+          id: custom[0].id,
+          name: custom[0].name,
+          description: custom[0].description || '',
+          rubric: custom[0].rubric,
+          scoreType: custom[0].scoreType as 'categorical' | 'binary' | 'metric',
+          judgeCall: 'custom' as const,
+          scaleConfig: scale,
+          weight: custom[0].weight,
+        }
+      }
+
+      throw new Error(`Unknown criterion: ${id}`)
+    }))
 
     // Detect agent type for routing
     const agentType = await getAgentType(set.agentId)
