@@ -95,6 +95,7 @@ export default function EvalConfigSection({ evalSetId, hasCases, agentType }: Ev
   const [newDimRubric, setNewDimRubric] = useState('')
   const [newDimScale, setNewDimScale] = useState<'5-level' | '3-level' | 'binary'>('5-level')
   const [creatingDim, setCreatingDim] = useState(false)
+  const [enhancingRubric, setEnhancingRubric] = useState(false)
 
   // Fetch custom dimensions on mount
   useEffect(() => {
@@ -260,128 +261,163 @@ export default function EvalConfigSection({ evalSetId, hasCases, agentType }: Ev
               })}
 
               {/* Custom Dimensions */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
+              <div className="border border-border rounded-md overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2.5 bg-surface-page">
                   <div className="text-xs font-medium text-cement">Custom Dimensions</div>
                   <button
                     onClick={() => setShowNewDimension(!showNewDimension)}
-                    className="text-[10px] text-glean-blue hover:text-glean-blue-hover font-medium transition-colors"
+                    className="text-xs text-glean-blue hover:text-glean-blue-hover font-medium transition-colors"
                   >
-                    {showNewDimension ? '← Cancel' : '+ New'}
+                    {showNewDimension ? '← Cancel' : '+ Create Dimension'}
                   </button>
                 </div>
 
-                {/* Existing custom dimensions */}
-                <div className="space-y-1.5">
-                  {userDimensions.map(dim => (
-                    <label
-                      key={dim.id}
-                      className={`flex items-center gap-3 p-2.5 rounded-md border cursor-pointer transition-colors ${
-                        customCriteria.includes(dim.id)
-                          ? 'border-glean-blue bg-glean-blue-light'
-                          : 'border-border-subtle hover:bg-surface-page'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={customCriteria.includes(dim.id)}
-                        onChange={() => toggleCriterion(dim.id)}
-                        className="h-3.5 w-3.5 rounded accent-[#343CED]"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sm text-[#1A1A1A]">{dim.name}</span>
-                        {dim.description && (
-                          <div className="text-xs text-cement mt-0.5">{dim.description}</div>
-                        )}
-                      </div>
-                      <button
-                        onClick={async (e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          if (!confirm(`Delete "${dim.name}"?`)) return
-                          await fetch(`/api/criteria?id=${dim.id}`, { method: 'DELETE' })
-                          setUserDimensions(prev => prev.filter(d => d.id !== dim.id))
-                          setCustomCriteria(prev => prev.filter(c => c !== dim.id))
-                          showToast('Dimension deleted', 'success')
-                        }}
-                        className="text-[10px] text-cement hover:text-score-fail transition-colors"
+                <div className="px-3 py-2">
+                  {/* Existing custom dimensions */}
+                  <div className="space-y-1.5">
+                    {userDimensions.map(dim => (
+                      <label
+                        key={dim.id}
+                        className={`flex items-center gap-3 p-2.5 rounded-md border cursor-pointer transition-colors ${
+                          customCriteria.includes(dim.id)
+                            ? 'border-glean-blue bg-glean-blue-light'
+                            : 'border-border-subtle hover:bg-surface-page'
+                        }`}
                       >
-                        ×
-                      </button>
-                    </label>
-                  ))}
+                        <input
+                          type="checkbox"
+                          checked={customCriteria.includes(dim.id)}
+                          onChange={() => toggleCriterion(dim.id)}
+                          className="h-3.5 w-3.5 rounded accent-[#343CED]"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm text-[#1A1A1A]">{dim.name}</span>
+                          {dim.description && (
+                            <div className="text-xs text-cement mt-0.5">{dim.description}</div>
+                          )}
+                        </div>
+                        <button
+                          onClick={async (e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            if (!confirm(`Delete "${dim.name}"?`)) return
+                            await fetch(`/api/criteria?id=${dim.id}`, { method: 'DELETE' })
+                            setUserDimensions(prev => prev.filter(d => d.id !== dim.id))
+                            setCustomCriteria(prev => prev.filter(c => c !== dim.id))
+                            showToast('Dimension deleted', 'success')
+                          }}
+                          className="text-[10px] text-cement hover:text-score-fail transition-colors px-1"
+                        >
+                          ×
+                        </button>
+                      </label>
+                    ))}
 
-                  {userDimensions.length === 0 && !showNewDimension && (
-                    <p className="text-xs text-cement-light italic py-2">No custom dimensions yet</p>
+                    {userDimensions.length === 0 && !showNewDimension && (
+                      <p className="text-xs text-cement-light italic py-3 text-center">No custom dimensions yet — create one to evaluate agent-specific qualities</p>
+                    )}
+                  </div>
+
+                  {/* New dimension form */}
+                  {showNewDimension && (
+                    <div className="mt-2 p-3 border border-border rounded-md bg-white space-y-3">
+                      <input
+                        value={newDimName}
+                        onChange={e => setNewDimName(e.target.value)}
+                        placeholder="Dimension name (e.g., Action Item Clarity, Source Citation Quality)"
+                        className="w-full px-2.5 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
+                      />
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-cement">Rubric</label>
+                          {newDimName.trim() && (
+                            <button
+                              disabled={enhancingRubric}
+                              onClick={async () => {
+                                setEnhancingRubric(true)
+                                try {
+                                  const resp = await fetch('/api/criteria/enhance', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      name: newDimName.trim(),
+                                      draft: newDimRubric.trim(),
+                                      scaleType: newDimScale,
+                                    }),
+                                  })
+                                  if (!resp.ok) throw new Error('Failed')
+                                  const { rubric } = await resp.json()
+                                  setNewDimRubric(rubric)
+                                } catch {
+                                  showToast('Failed to enhance rubric', 'error')
+                                } finally {
+                                  setEnhancingRubric(false)
+                                }
+                              }}
+                              className="text-[10px] text-glean-blue hover:text-glean-blue-hover font-medium transition-colors disabled:text-cement-light"
+                            >
+                              {enhancingRubric ? 'Generating...' : '✦ Enhance with AI'}
+                            </button>
+                          )}
+                        </div>
+                        <textarea
+                          value={newDimRubric}
+                          onChange={e => setNewDimRubric(e.target.value)}
+                          placeholder="Describe what the judge should evaluate, or type a few words and click 'Enhance with AI' to generate a full rubric."
+                          rows={5}
+                          className="w-full px-2.5 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <label className="text-xs text-cement">Scale:</label>
+                        <select
+                          value={newDimScale}
+                          onChange={e => setNewDimScale(e.target.value as any)}
+                          className="px-2 py-1 border border-border rounded text-xs focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
+                        >
+                          <option value="5-level">5-level (full → failure)</option>
+                          <option value="3-level">3-level (low / medium / high)</option>
+                          <option value="binary">Binary (yes / no)</option>
+                        </select>
+                        <div className="flex-1" />
+                        <button
+                          disabled={!newDimName.trim() || !newDimRubric.trim() || creatingDim}
+                          onClick={async () => {
+                            setCreatingDim(true)
+                            try {
+                              const resp = await fetch('/api/criteria', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  name: newDimName.trim(),
+                                  description: newDimRubric.trim().slice(0, 100),
+                                  rubric: newDimRubric.trim(),
+                                  scaleType: newDimScale,
+                                }),
+                              })
+                              if (!resp.ok) throw new Error('Failed')
+                              const { id } = await resp.json()
+                              const updated = await fetch('/api/criteria').then(r => r.json())
+                              setUserDimensions(updated)
+                              setCustomCriteria(prev => [...prev, id])
+                              setNewDimName('')
+                              setNewDimRubric('')
+                              setShowNewDimension(false)
+                              showToast('Custom dimension created', 'success')
+                            } catch {
+                              showToast('Failed to create dimension', 'error')
+                            } finally {
+                              setCreatingDim(false)
+                            }
+                          }}
+                          className="px-3 py-1.5 text-xs bg-glean-blue text-white rounded hover:bg-glean-blue-hover disabled:bg-cement-light disabled:cursor-not-allowed transition-colors font-medium"
+                        >
+                          {creatingDim ? 'Creating...' : 'Create'}
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
-
-                {/* New dimension form */}
-                {showNewDimension && (
-                  <div className="mt-2 p-3 border border-glean-blue/30 rounded-md bg-glean-blue-light/30 space-y-2">
-                    <input
-                      value={newDimName}
-                      onChange={e => setNewDimName(e.target.value)}
-                      placeholder="Dimension name (e.g., Brand Voice Consistency)"
-                      className="w-full px-2.5 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
-                    />
-                    <textarea
-                      value={newDimRubric}
-                      onChange={e => setNewDimRubric(e.target.value)}
-                      placeholder="Rubric — what should the judge evaluate? Include scale descriptions for each level."
-                      rows={4}
-                      className="w-full px-2.5 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
-                    />
-                    <div className="flex items-center gap-3">
-                      <label className="text-xs text-cement">Scale:</label>
-                      <select
-                        value={newDimScale}
-                        onChange={e => setNewDimScale(e.target.value as any)}
-                        className="px-2 py-1 border border-border rounded text-xs focus:outline-none focus:ring-2 focus:ring-glean-blue/30"
-                      >
-                        <option value="5-level">5-level (full → failure)</option>
-                        <option value="3-level">3-level (low / medium / high)</option>
-                        <option value="binary">Binary (yes / no)</option>
-                      </select>
-                      <div className="flex-1" />
-                      <button
-                        disabled={!newDimName.trim() || !newDimRubric.trim() || creatingDim}
-                        onClick={async () => {
-                          setCreatingDim(true)
-                          try {
-                            const resp = await fetch('/api/criteria', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                name: newDimName.trim(),
-                                description: newDimRubric.trim().slice(0, 100),
-                                rubric: newDimRubric.trim(),
-                                scaleType: newDimScale,
-                              }),
-                            })
-                            if (!resp.ok) throw new Error('Failed')
-                            const { id } = await resp.json()
-                            // Refresh list and auto-select
-                            const updated = await fetch('/api/criteria').then(r => r.json())
-                            setUserDimensions(updated)
-                            setCustomCriteria(prev => [...prev, id])
-                            setNewDimName('')
-                            setNewDimRubric('')
-                            setShowNewDimension(false)
-                            showToast('Custom dimension created', 'success')
-                          } catch {
-                            showToast('Failed to create dimension', 'error')
-                          } finally {
-                            setCreatingDim(false)
-                          }
-                        }}
-                        className="px-3 py-1.5 text-xs bg-glean-blue text-white rounded hover:bg-glean-blue-hover disabled:bg-cement-light disabled:cursor-not-allowed transition-colors font-medium"
-                      >
-                        {creatingDim ? 'Creating...' : 'Create'}
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           </div>
