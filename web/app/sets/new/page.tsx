@@ -28,6 +28,7 @@ export default function NewEvalSet() {
   const [fetchingAgent, setFetchingAgent] = useState(false)
   const [agentFetched, setAgentFetched] = useState(false)
   const [agentSchemaData, setAgentSchemaData] = useState<any>(null)
+  const [showRawSchema, setShowRawSchema] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
 
@@ -87,6 +88,7 @@ export default function NewEvalSet() {
     setAgentDescription('')
     setAgentType('unknown')
     setAgentSchemaData(null)
+    setShowRawSchema(false)
 
     // Auto-fetch if agent ID looks valid
     if (value.length >= 24 && /^[a-f0-9]+$/i.test(value)) {
@@ -402,6 +404,35 @@ export default function NewEvalSet() {
               </div>
               {agentDescription && (
                 <p className="text-cement text-xs mt-0.5">{agentDescription}</p>
+              )}
+              {agentSchemaData?.input_schema && (
+                <div className="mt-2 pt-2 border-t border-glean-blue/10">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-[10px] font-medium text-cement uppercase tracking-wide">Input Schema</p>
+                    <button
+                      onClick={() => setShowRawSchema(!showRawSchema)}
+                      className="text-[10px] text-glean-blue hover:text-glean-blue-hover font-medium transition-colors"
+                    >
+                      {showRawSchema ? 'Hide JSON' : 'View JSON'}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(agentSchemaData.input_schema).map(([field, meta]: [string, any]) => (
+                      <span
+                        key={field}
+                        className="text-xs px-2 py-0.5 rounded-md bg-white/60 border border-glean-blue/15 text-[#1A1A1A] font-mono"
+                      >
+                        {field}
+                        <span className="text-cement ml-1 font-sans text-[10px]">{meta?.type || 'string'}</span>
+                      </span>
+                    ))}
+                  </div>
+                  {showRawSchema && (
+                    <pre className="mt-2 p-3 bg-[#1A1A1A] text-green-400 text-xs font-mono rounded-lg overflow-x-auto max-h-64 overflow-y-auto">
+                      {JSON.stringify(agentSchemaData, null, 2)}
+                    </pre>
+                  )}
+                </div>
               )}
             </div>
           )}
