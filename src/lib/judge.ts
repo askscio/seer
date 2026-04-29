@@ -295,7 +295,12 @@ ${scoreFormat}`
 }
 
 // ===== Call 3: Faithfulness (source-grounded, pre-fetched content) =====
-// Uses DEFAULT agent with modelSetId — document content is injected, no search tools needed
+// Uses DEFAULT agent with modelSetId — document content is injected, no search tools needed.
+//
+// Methodology adapted from internal Hallucination Judge and Groundedness Judge:
+// - Hallucination Judge -> labels each claim Faithful/Hallucinated/Ungrounded -> maps to low/medium/high.
+// - Groundedness Judge -> labels each claim Inferable/Generic/Ungrounded -> maps to full/.../failure.
+// Each criterion routed by id; unknown faithfulness criteria fall back to a generic claim-check.
 
 async function judgeFaithfulnessBatch(
   criteria: CriterionDefinition[],
@@ -305,68 +310,172 @@ async function judgeFaithfulnessBatch(
   sourceDocContent: SourceDoc[],
   model: { id: string; name: string },
 ): Promise<JudgeScore[]> {
-  const chainText = formatReasoningChain(reasoningChain)
+  const contextText = formatContextForFaithfulness(sourceDocContent, reasoningChain)
+  const out: JudgeScore[] = []
+  for (const c of criteria) {
+    if (c.id === 'hallucination_risk') {
+      out.push(await callHallucinationJudge(c, query, response, contextText, model))
+    } else if (c.id === 'groundedness') {
+      out.push(await callGroundednessJudge(c, query, response, contextText, model))
+    } else {
+      out.push(await callGroundednessJudge(c, query, response, contextText, model))
+    }
+  }
+  return out
+}
 
-  // Format pre-fetched document content for the judge
+function formatContextForFaithfulness(sourceDocContent: SourceDoc[], reasoningChain?: any[]): string {
+  const chainText = formatReasoningChain(reasoningChain)
   const docContentBlock = sourceDocContent.length > 0
-    ? sourceDocContent.map(doc =>
-        `--- ${doc.title} ---\n${doc.content}`
-      ).join('\n\n')
+    ? sourceDocContent.map(doc => `--- ${doc.title} ---\n${doc.content}`).join('\n\n')
     : 'No documents were retrieved by the agent.'
 
-  const criteriaBlock = criteria.map(c =>
-    `=== ${c.id.toUpperCase()} ===\n${c.name}: ${c.description}\n\n${c.rubric}`
-  ).join('\n\n')
+  return `Agent execution trace:\n${chainText || '(none)'}\n\nAgent retrieved source documents:\n${docContentBlock}`
+}
 
-  const scoreFormat = criteria.map(c => {
-    if (c.scoreType === 'binary') {
-      return `<${c.id}_reasoning>[Your analysis]</${c.id}_reasoning>\n<${c.id}>[yes or no]</${c.id}>`
-    }
-    return `<${c.id}_reasoning>[Your analysis]</${c.id}_reasoning>\n<${c.id}>[${c.scaleConfig?.categories?.join(' / ') || 'value'}]</${c.id}>`
-  }).join('\n\n')
+interface StatementVerdict {
+  statement: string
+  reasoning: string
+  verdict: string
+}
 
-  const prompt = `You are evaluating whether an AI agent's response is faithful to what it actually retrieved. You are NOT checking correctness — only whether the response accurately represents the content of the source documents.
+async function callHallucinationJudge(
+  criterion: CriterionDefinition,
+  query: string,
+  response: string,
+  context: string,
+  model: { id: string; name: string },
+): Promise<JudgeScore> {
+  const prompt = `You will be provided with a current objective, a response, the context used to generate the response, and an optional conversation history. The current objective or the response may refer to conversation history.
 
-${criteriaBlock}
+Your task is to evaluate the faithfulness of the response to the given information in the context and conversation history. Follow these steps:
+1. Identify Key Statements: Extract the main statements or claims from the response. Focus only on the important claims and ignore any general disclaimers.
+2. Label the Statements: Assess each statement using the following labels:
+- Faithful: The statement can be logically deduced from the context or conversation history, is directly supported by them, or transparently states its assumptions.
+- Hallucinated: The statement misrepresents the context or conversation history by making unsupported assumptions, contradictions, or fabrications based on that information.
+- Ungrounded: The statement does not reference information from either the context or conversation history.
 
-=== MATERIAL ===
+For each statement, create a structured entry with the following components:
+- statement: The specific statement or claim.
+- reasoning: Verbalize your reasoning as you think about the label
+- verdict: The label you assigned, it must be one of {Faithful,Hallucinated,Ungrounded}.
+
+Prepare your final output in valid JSON format as a list of structured entries, each representing an evaluation of a statement.
+
+Ensure that your final output strictly complies with the valid JSON format.
+
+Here is the entry for you to evaluate:
+
+INPUT:
+
+"current_objective": ${JSON.stringify(query)}
+"context": ${JSON.stringify(context)}
+"response": ${JSON.stringify(response)}
+"conversation_history": ""
+
+OUTPUT:`
+
+  const text = await callJudge(prompt, model.id, 'judge:hallucination')
+  const verdicts = parseStatementVerdicts(text)
+
+  const lower = (s: string) => s.toLowerCase()
+  const hasHallucinated = verdicts.some(v => lower(v.verdict).includes('hallucinated'))
+  const hasUngrounded = verdicts.some(v => lower(v.verdict).includes('ungrounded'))
+  let category: string
+  if (hasHallucinated) category = 'high'
+  else if (hasUngrounded) category = 'medium'
+  else category = 'low'
+
+  const reasoning = verdicts.length > 0
+    ? verdicts.map(v => `- "${truncate(v.statement, 200)}" -> ${v.verdict}: ${truncate(v.reasoning, 240)}`).join('\n')
+    : 'No statements extracted; defaulting to low risk.'
+
+  return {
+    criterionId: criterion.id,
+    scoreCategory: category,
+    reasoning,
+    judgeModel: model.name,
+  }
+}
+
+async function callGroundednessJudge(
+  criterion: CriterionDefinition,
+  query: string,
+  response: string,
+  context: string,
+  model: { id: string; name: string },
+): Promise<JudgeScore> {
+  const prompt = `You are an expert model evaluator tasked with assessing the groundedness of a model's response in relation to the provided context.
+
+You will be given:
+- A **query**
+- A **context** containing information relevant to the query
+- A **response** generated by the model
+
+Your task is to evaluate the groundedness of the response by following these steps:
+1. Identify Key Statements: Extract the main statements or claims made in the response. Only focus on the important claims, and ignore any general disclaimers or vague statements.
+2. Label the Statements: For each extracted statement, assign one of the following groundedness labels based on how it relates to the provided context:
+- Inferable: The statement can be **logically deduced** from, or is **directly supported by** the context.
+- Generic: The statement is a **general disclaimer** or **conversation filler** that does not require context-based support.
+- Ungrounded: The statement is **not supported by** the context or **contradicts** the provided information.
+
+For each statement, create a structured entry with the following components:
+- statement: The specific statement or claim.
+- reasoning: Verbalize your reasoning as you think about the groundedness label
+- verdict: The groundedness label you assigned, it must be one of {Inferable, Generic, Ungrounded}.
+
+You MUST output a valid JSON with a list of structured entries, each representing an evaluation of a statement.
+
+Here is the entry for you to evaluate:
 
 <query>
 ${query}
 </query>
 
-<agent_execution_trace>
-${chainText || 'No reasoning chain available.'}
-</agent_execution_trace>
+<context>
+${context}
+</context>
 
-<agent_source_documents>
-The following document excerpts were retrieved by the agent during execution. Check whether the response faithfully represents what these documents say.
-
-${docContentBlock}
-</agent_source_documents>
-
-<actual_response>
+<response>
 ${response}
-</actual_response>
+</response>
 
-=== INSTRUCTIONS ===
+Json Output:`
 
-1. Read the document excerpts provided above
-2. Identify the key claims in the agent's response
-3. For each claim, check whether it is supported by the actual content of the retrieved documents — not just by document titles
-4. Flag any claims where the response misrepresents, exaggerates, or fabricates details that are not in the sources
-5. Assign categories using the rubrics
+  const text = await callJudge(prompt, model.id, 'judge:groundedness')
+  const verdicts = parseStatementVerdicts(text)
 
-A response that says "no data found" when no documents were retrieved is CORRECT behavior.
+  const judgeable = verdicts.filter(v => !/generic/i.test(v.verdict))
+  const inferable = judgeable.filter(v => /inferable/i.test(v.verdict)).length
+  const total = judgeable.length
 
-<claim_check>
-- "[claim]": [GROUNDED in <source>/UNGROUNDED/HEDGED/MISREPRESENTED from <source>]
-</claim_check>
+  let category: string
+  if (total === 0) {
+    category = 'substantial'
+  } else {
+    const ratio = inferable / total
+    if (ratio >= 0.95) category = 'full'
+    else if (ratio >= 0.75) category = 'substantial'
+    else if (ratio >= 0.5) category = 'partial'
+    else if (ratio > 0) category = 'minimal'
+    else category = 'failure'
+  }
 
-${scoreFormat}`
+  const reasoning = verdicts.length > 0
+    ? verdicts.map(v => `- "${truncate(v.statement, 200)}" -> ${v.verdict}: ${truncate(v.reasoning, 240)}`).join('\n')
+    : 'No statements extracted; defaulting to substantial.'
 
-  const text = await callJudge(prompt, model.id)
-  return criteria.map(c => parseScore(text, c, model.name))
+  return {
+    criterionId: criterion.id,
+    scoreCategory: category,
+    reasoning,
+    judgeModel: model.name,
+  }
+}
+
+function truncate(s: string, n: number): string {
+  if (!s) return ''
+  return s.length > n ? `${s.slice(0, n)}...` : s
 }
 
 // ===== Call 4: Factuality (search-verified, source-citing) =====
@@ -677,6 +786,40 @@ function parseScore(text: string, criterion: CriterionDefinition, modelName: str
 }
 
 // ===== Helpers =====
+
+function parseStatementVerdicts(text: string): StatementVerdict[] {
+  if (!text) return []
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const candidates = [fenceMatch?.[1], text]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const trimmed = candidate.trim()
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) return normalizeVerdicts(parsed)
+    } catch {}
+    const start = trimmed.indexOf('[')
+    const end = trimmed.lastIndexOf(']')
+    if (start >= 0 && end > start) {
+      try {
+        const parsed = JSON.parse(trimmed.slice(start, end + 1))
+        if (Array.isArray(parsed)) return normalizeVerdicts(parsed)
+      } catch {}
+    }
+  }
+  return []
+}
+
+function normalizeVerdicts(items: any[]): StatementVerdict[] {
+  return items
+    .filter(it => it && typeof it === 'object')
+    .map(it => ({
+      statement: String(it.statement || '').trim(),
+      reasoning: String(it.reasoning || '').trim(),
+      verdict: String(it.verdict || '').trim(),
+    }))
+    .filter(v => v.statement || v.verdict)
+}
 
 function formatReasoningChain(chain?: any[]): string {
   if (!chain || chain.length === 0) return ''
