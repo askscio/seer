@@ -18,6 +18,7 @@ export async function POST(request: Request) {
       mode = 'quick',
       multiTurn = false,
       maxTurns = 5,
+      safetyPolicy,
     } = body
 
     if (!evalSetId) {
@@ -84,11 +85,12 @@ export async function POST(request: Request) {
         multiTurn,
         maxTurns,
         agentType,
+        safetyPolicy: safetyPolicy || null,
       })
     })
 
     // Process cases (async - don't block response)
-    processCases(runId, set.agentId, cases, criteriaObjs, judges, multiTurn, maxTurns, agentType).catch(console.error)
+    processCases(runId, set.agentId, cases, criteriaObjs, judges, multiTurn, maxTurns, agentType, safetyPolicy).catch(console.error)
 
     return NextResponse.json({ runId, status: 'started' })
   } catch (error) {
@@ -147,6 +149,7 @@ async function processCases(
   multiTurn: boolean = false,
   maxTurns: number = 5,
   agentType: string = 'workflow',
+  safetyPolicy?: string,
 ) {
   const results: any[] = []
 
@@ -177,6 +180,7 @@ async function processCases(
           evalGuidance: testCase.evalGuidance || undefined,
           goldenAnswer: testCase.goldenAnswer || undefined,
           goldenSources,
+          safetyPolicy,
         },
         judgeModelIds,
       )

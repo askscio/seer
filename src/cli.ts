@@ -377,6 +377,7 @@ program
   .option('--multi-judge', 'Run with multiple judge models (Opus 4.6 + GPT-5)', false)
   .option('--multi-turn', 'Enable multi-turn conversation mode (autonomous agents only)', false)
   .option('--max-turns <n>', 'Max conversation turns for multi-turn mode', '5')
+  .option('--safety-policy <text>', 'Override safety policy text used by safety judge')
   .action(async (setId, opts) => {
     try {
       // Get eval set
@@ -457,6 +458,7 @@ program
           judges: judgeModelIds,
           mode,
           multiJudge: opts.multiJudge,
+          safetyPolicy: opts.safetyPolicy || null,
         })
       })
 
@@ -496,6 +498,7 @@ program
               evalGuidance: testCase.evalGuidance || undefined,
               goldenAnswer: testCase.goldenAnswer || undefined,
               goldenSources,
+              safetyPolicy: opts.safetyPolicy || undefined,
             },
             judgeModelIds,
           )
