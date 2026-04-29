@@ -32,7 +32,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Benchmark inputs / artefacts
-runs/
+/runs/
 *.xlsx
 *.docx
 answers-only-*.csv
