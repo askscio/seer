@@ -13,8 +13,8 @@ export async function POST(request: Request) {
     const body = await request.json()
     const {
       evalSetId,
-      criteria = ['topical_coverage', 'response_quality', 'groundedness', 'hallucination_risk'],
-      judges = ['OPUS_4_6_VERTEX'],
+      criteria = ['answer_accuracy', 'answer_completeness', 'hallucination_risk', 'citation_correctness', 'latency'],
+      judges = ['GPT_5'],
       mode = 'quick',
       multiTurn = false,
       maxTurns = 5,
@@ -165,6 +165,7 @@ async function processCases(
             simulatorStrategy: caseMetadata?.simulatorStrategy,
           })
         : await runAgent(agentId, testCase.query, testCase.id, structuredFields)
+      const goldenSources = parseJsonStringArray(testCase.goldenSources)
 
       // 2. Judge (batched by call type — coverage, quality, faithfulness, factuality)
       const scores = await judgeResponseBatch(
@@ -172,7 +173,11 @@ async function processCases(
         testCase.query,
         agentResult.response,
         agentResult,
-        testCase.evalGuidance || undefined,
+        {
+          evalGuidance: testCase.evalGuidance || undefined,
+          goldenAnswer: testCase.goldenAnswer || undefined,
+          goldenSources,
+        },
         judgeModelIds,
       )
 
@@ -247,4 +252,17 @@ async function processCases(
       completedAt: new Date()
     })
     .where(eq(evalRuns.id, runId))
+}
+
+function parseJsonStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.map(v => String(v).trim()).filter(Boolean) : []
+  } catch {
+    return raw
+      .split('|')
+      .map(v => v.trim())
+      .filter(Boolean)
+  }
 }

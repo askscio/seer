@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm'
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { evalSetId, query, evalGuidance, context, fields, simulatorContext, simulatorStrategy } = body
+    const { evalSetId, query, evalGuidance, goldenAnswer, goldenSources, context, fields, simulatorContext, simulatorStrategy } = body
 
     if (!evalSetId || !query) {
       return NextResponse.json(
@@ -26,6 +26,8 @@ export async function POST(request: Request) {
       evalSetId,
       query,
       evalGuidance: evalGuidance || null,
+      goldenAnswer: goldenAnswer || null,
+      goldenSources: Array.isArray(goldenSources) ? JSON.stringify(goldenSources) : null,
       context: context || null,
       metadata: (fields || simulatorContext || simulatorStrategy) ? JSON.stringify({ fields: fields || undefined, simulatorContext: simulatorContext || undefined, simulatorStrategy: simulatorStrategy || undefined }) : null,
       createdAt: new Date(),
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json()
-    const { id, query, evalGuidance, context, metadata } = body
+    const { id, query, evalGuidance, goldenAnswer, goldenSources, context, metadata } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Missing case ID' }, { status: 400 })
@@ -53,6 +55,8 @@ export async function PATCH(request: Request) {
     const updates: any = {}
     if (query !== undefined) updates.query = query
     if (evalGuidance !== undefined) updates.evalGuidance = evalGuidance
+    if (goldenAnswer !== undefined) updates.goldenAnswer = goldenAnswer
+    if (goldenSources !== undefined) updates.goldenSources = Array.isArray(goldenSources) ? JSON.stringify(goldenSources) : null
     if (context !== undefined) updates.context = context
     if (metadata !== undefined) updates.metadata = metadata
 

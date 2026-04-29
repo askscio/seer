@@ -14,7 +14,9 @@
 import { config } from '../lib/config'
 import { extractContentWithFallback } from '../lib/extract-content'
 import { fetchAgentInfo } from '../lib/fetch-agent'
+import { fetchWithRetry } from '../lib/retry'
 import { generateUserReply } from '../lib/simulator'
+import { tokenLedger } from '../lib/token-ledger'
 import type { AgentResult, AgentType, ConversationTurn } from '../types'
 
 interface RunWorkflowFragment {
@@ -124,7 +126,7 @@ async function runAutonomousAgent(
     timeoutMillis: 300_000,
   }
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${config.gleanBackend}/rest/api/v1/chat`,
     {
       method: 'POST',
@@ -134,7 +136,8 @@ async function runAutonomousAgent(
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(300_000),
-    }
+    },
+    { label: `agent-chat:${agentId.slice(0, 8)}` },
   )
 
   if (!response.ok) {
@@ -145,6 +148,17 @@ async function runAutonomousAgent(
       console.error(`  AgentId: ${agentId}`)
       console.error(`  Response: ${error.slice(0, 500)}`)
     }
+    tokenLedger.record({
+      scope: 'agent_run',
+      model: `agent:${agentId}`,
+      promptText: query,
+      responseText: error,
+      latencyMs: Date.now() - startTime,
+      status: 'failed',
+      error: `${response.status} ${response.statusText}`,
+      caseIdOverride: caseId,
+      agentIdOverride: agentId,
+    })
     throw new Error(`chat API error: ${response.status} - ${error}`)
   }
 
@@ -174,6 +188,17 @@ async function runAutonomousAgent(
   ]
 
   console.log(`  → Mode: autonomous (Chat API)`)
+
+  tokenLedger.record({
+    scope: 'agent_run',
+    model: `agent:${agentId}`,
+    promptText: query,
+    responseText,
+    latencyMs,
+    status: 'ok',
+    caseIdOverride: caseId,
+    agentIdOverride: agentId,
+  })
 
   return {
     caseId,
@@ -236,7 +261,7 @@ async function runWorkflowAgent(
     }]
   }
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${config.gleanBackend}/rest/api/v1/runworkflow`,
     {
       method: 'POST',
@@ -246,7 +271,8 @@ async function runWorkflowAgent(
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(300_000),
-    }
+    },
+    { label: `agent-workflow:${agentId.slice(0, 8)}` },
   )
 
   if (!response.ok) {
@@ -257,6 +283,17 @@ async function runWorkflowAgent(
       console.error(`  Payload: ${JSON.stringify(payload, null, 2)}`)
       console.error(`  Response: ${error.slice(0, 500)}`)
     }
+    tokenLedger.record({
+      scope: 'agent_run',
+      model: `agent:${agentId}`,
+      promptText: JSON.stringify(payload),
+      responseText: error,
+      latencyMs: Date.now() - startTime,
+      status: 'failed',
+      error: `${response.status} ${response.statusText}`,
+      caseIdOverride: caseId,
+      agentIdOverride: agentId,
+    })
     throw new Error(`runworkflow error: ${response.status} - ${error}`)
   }
 
@@ -277,6 +314,17 @@ async function runWorkflowAgent(
 
   const responseText = extractFinalResponse(data)
   const reasoningChain = extractReasoningChain(data.messages)
+
+  tokenLedger.record({
+    scope: 'agent_run',
+    model: `agent:${agentId}`,
+    promptText: JSON.stringify(payload),
+    responseText,
+    latencyMs,
+    status: 'ok',
+    caseIdOverride: caseId,
+    agentIdOverride: agentId,
+  })
 
   return {
     caseId,
@@ -456,7 +504,8 @@ export async function runMultiTurnAgent(
 
     console.log(`  → Turn ${turn}/${maxTurns}...`)
 
-    const response = await fetch(
+    const turnStart = Date.now()
+    const response = await fetchWithRetry(
       `${config.gleanBackend}/rest/api/v1/chat`,
       {
         method: 'POST',
@@ -466,11 +515,23 @@ export async function runMultiTurnAgent(
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(120_000),
-      }
+      },
+      { label: `agent-multiturn:${agentId.slice(0, 8)}-t${turn}` },
     )
 
     if (!response.ok) {
       const error = await response.text()
+      tokenLedger.record({
+        scope: `agent_run_turn:${turn}`,
+        model: `agent:${agentId}`,
+        promptText: userMessage.content,
+        responseText: error,
+        latencyMs: Date.now() - turnStart,
+        status: 'failed',
+        error: `${response.status} ${response.statusText}`,
+        caseIdOverride: caseId,
+        agentIdOverride: agentId,
+      })
       throw new Error(`Multi-turn chat error (turn ${turn}): ${response.status} - ${error}`)
     }
 
@@ -480,6 +541,17 @@ export async function runMultiTurnAgent(
     // Extract agent response
     const responseText = extractContentWithFallback(data)
     if (!responseText) throw new Error(`No response from agent at turn ${turn}`)
+
+    tokenLedger.record({
+      scope: `agent_run_turn:${turn}`,
+      model: `agent:${agentId}`,
+      promptText: userMessage.content,
+      responseText,
+      latencyMs: Date.now() - turnStart,
+      status: 'ok',
+      caseIdOverride: caseId,
+      agentIdOverride: agentId,
+    })
 
     const turnToolCalls = extractToolCalls(data.messages)
     allToolCalls = allToolCalls.concat(turnToolCalls)

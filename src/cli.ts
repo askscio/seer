@@ -182,6 +182,8 @@ setCmd
   .requiredOption('--query <query>', 'Test query')
   .option('--expected <answer>', 'Eval guidance (optional)')
   .option('--guidance <guidance>', 'Eval guidance (optional, alias for --expected)')
+  .option('--golden-answer <answer>', 'Golden answer for benchmark scoring')
+  .option('--golden-sources <sources>', 'Golden source URLs (JSON array or "|" separated)')
   .option('--context <context>', 'Additional context for judge')
   .action(async (setId, opts) => {
     try {
@@ -197,6 +199,8 @@ setCmd
         evalSetId: setId,
         query: opts.query,
         evalGuidance: guidance || null,
+        goldenAnswer: opts.goldenAnswer || null,
+        goldenSources: opts.goldenSources ? JSON.stringify(parseGoldenSources(opts.goldenSources)) : null,
         context: opts.context || null,
         createdAt: new Date()
       })
@@ -215,6 +219,8 @@ setCmd
   .description('Edit an existing test case')
   .option('--query <query>', 'New query text')
   .option('--guidance <guidance>', 'New eval guidance')
+  .option('--golden-answer <answer>', 'New golden answer')
+  .option('--golden-sources <sources>', 'New golden source URLs (JSON array or "|" separated)')
   .option('--context <context>', 'New context')
   .action(async (caseId, opts) => {
     try {
@@ -226,10 +232,12 @@ setCmd
       const updates: any = {}
       if (opts.query !== undefined) updates.query = opts.query
       if (opts.guidance !== undefined) updates.evalGuidance = opts.guidance
+      if (opts.goldenAnswer !== undefined) updates.goldenAnswer = opts.goldenAnswer
+      if (opts.goldenSources !== undefined) updates.goldenSources = JSON.stringify(parseGoldenSources(opts.goldenSources))
       if (opts.context !== undefined) updates.context = opts.context
 
       if (Object.keys(updates).length === 0) {
-        console.log('No updates specified. Use --query, --guidance, or --context.')
+        console.log('No updates specified. Use --query, --guidance, --golden-answer, --golden-sources, or --context.')
         process.exit(1)
       }
 
@@ -265,7 +273,7 @@ setCmd
 
 setCmd
   .command('import-csv <set-id> <file>')
-  .description('Import test cases from a CSV file (columns: query,eval_guidance)')
+  .description('Import test cases from CSV (supports legacy or golden benchmark columns)')
   .action(async (setId, file) => {
     try {
       const set = await db.select().from(evalSets).where(eq(evalSets.id, setId))
@@ -364,7 +372,7 @@ setCmd
 program
   .command('run <set-id>')
   .description('Run evaluation on an eval set')
-  .option('--criteria <list>', 'Comma-separated criteria IDs', 'topical_coverage,response_quality,groundedness,hallucination_risk')
+  .option('--criteria <list>', 'Comma-separated criteria IDs', 'answer_accuracy,answer_completeness,hallucination_risk,citation_correctness,latency')
   .option('--deep', 'Include factual accuracy verification (adds 4th judge call with company search)', false)
   .option('--multi-judge', 'Run with multiple judge models (Opus 4.6 + GPT-5)', false)
   .option('--multi-turn', 'Enable multi-turn conversation mode (autonomous agents only)', false)
@@ -412,7 +420,7 @@ program
 
       const judgeModelIds = opts.multiJudge
         ? JUDGE_MODELS.map(m => m.id)
-        : [JUDGE_MODELS[0].id]
+        : [JUDGE_MODELS.find(m => m.id === 'GPT_5')?.id || JUDGE_MODELS[0].id]
       const judgeDisplay = judgeModelIds.length > 1
         ? `Ensemble (${judgeModelIds.map(id => JUDGE_MODELS.find(m => m.id === id)?.name).join(', ')})`
         : JUDGE_MODELS.find(m => m.id === judgeModelIds[0])?.displayName || judgeModelIds[0]
@@ -445,7 +453,7 @@ program
         status: 'running',
         config: JSON.stringify({
           criteria: criteriaIds,
-          judgeModel: judgeModelIds.length > 1 ? 'ensemble' : JUDGE_MODELS.find(m => m.id === judgeModelIds[0])?.name || 'opus-4-6',
+          judgeModel: judgeModelIds.length > 1 ? 'ensemble' : JUDGE_MODELS.find(m => m.id === judgeModelIds[0])?.name || 'gpt-5',
           judges: judgeModelIds,
           mode,
           multiJudge: opts.multiJudge,
@@ -476,13 +484,19 @@ program
               })
             : await runAgent(set.agentId, testCase.query, testCase.id, structuredFields)
 
+          const goldenSources = parseJsonStringArray(testCase.goldenSources)
+
           // 2. Judge (batch by call type — coverage, faithfulness, factuality)
           const scores = await judgeResponseBatch(
             criteria,
             testCase.query,
             agentResult.response,
             agentResult,
-            testCase.evalGuidance || undefined,
+            {
+              evalGuidance: testCase.evalGuidance || undefined,
+              goldenAnswer: testCase.goldenAnswer || undefined,
+              goldenSources,
+            },
             judgeModelIds,
           )
 
@@ -848,7 +862,10 @@ program.parse()
 
 /**
  * Parse a CSV file and import cases into an eval set.
- * Format: query,eval_guidance (header row optional, guidance column optional)
+ * Supported headers:
+ * - Legacy: query,eval_guidance
+ * - Golden benchmark: question,good quality answer,doc link
+ * - Canonical: query,golden_answer,golden_sources[,eval_guidance]
  */
 async function importCSVToSet(setId: string, filePath: string): Promise<number> {
   const text = readFileSync(filePath, 'utf-8')
@@ -858,10 +875,17 @@ async function importCSVToSet(setId: string, filePath: string): Promise<number> 
     throw new Error('CSV file is empty')
   }
 
-  // Check for header row
-  const firstLine = lines[0].toLowerCase()
-  const hasHeader = firstLine.includes('query') || firstLine.includes('eval_guidance') || firstLine.includes('guidance')
+  const headerFields = parseCSVLine(lines[0])
+  const normalizedHeader = headerFields.map(normalizeCsvHeader)
+  const hasHeader = normalizedHeader.some(h =>
+    ['query', 'question', 'eval_guidance', 'guidance', 'golden_answer', 'good_quality_answer', 'golden_sources', 'doc_link'].includes(h)
+  )
   const dataLines = hasHeader ? lines.slice(1) : lines
+
+  const headerIndex = new Map<string, number>()
+  if (hasHeader) {
+    normalizedHeader.forEach((key, idx) => headerIndex.set(key, idx))
+  }
 
   let count = 0
   for (const line of dataLines) {
@@ -869,12 +893,31 @@ async function importCSVToSet(setId: string, filePath: string): Promise<number> 
     if (!trimmed) continue
 
     const fields = parseCSVLine(trimmed)
-    if (fields.length > 0 && fields[0]) {
+    let query = ''
+    let evalGuidance: string | null = null
+    let goldenAnswer: string | null = null
+    let goldenSources: string[] = []
+
+    if (hasHeader) {
+      query = getCsvField(fields, headerIndex, ['query', 'question'])
+      evalGuidance = getCsvField(fields, headerIndex, ['eval_guidance', 'guidance']) || null
+      goldenAnswer = getCsvField(fields, headerIndex, ['golden_answer', 'good_quality_answer', 'expected_answer']) || null
+      const sourceValue = getCsvField(fields, headerIndex, ['golden_sources', 'doc_link', 'doc_url', 'source_url'])
+      goldenSources = parseGoldenSources(sourceValue)
+    } else {
+      // Backward compatibility: query,eval_guidance
+      query = fields[0] || ''
+      evalGuidance = fields[1] || null
+    }
+
+    if (query) {
       await db.insert(evalCases).values({
         id: generateId(),
         evalSetId: setId,
-        query: fields[0],
-        evalGuidance: fields[1] || null,
+        query,
+        evalGuidance,
+        goldenAnswer,
+        goldenSources: goldenSources.length > 0 ? JSON.stringify(goldenSources) : null,
         createdAt: new Date()
       })
       count++
@@ -920,6 +963,56 @@ function parseCSVLine(line: string): string[] {
 
   fields.push(current.trim())
   return fields
+}
+
+function normalizeCsvHeader(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function getCsvField(fields: string[], headerIndex: Map<string, number>, keys: string[]): string {
+  for (const key of keys) {
+    const idx = headerIndex.get(key)
+    if (idx !== undefined && idx < fields.length) {
+      return fields[idx]?.trim() || ''
+    }
+  }
+  return ''
+}
+
+function parseGoldenSources(raw?: string): string[] {
+  if (!raw) return []
+  const trimmed = raw.trim()
+  if (!trimmed) return []
+
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) {
+        return parsed.map(v => String(v).trim()).filter(Boolean)
+      }
+    } catch {
+      // Fall through to separator-based parsing.
+    }
+  }
+
+  return trimmed
+    .split('|')
+    .map(v => v.trim())
+    .filter(Boolean)
+}
+
+function parseJsonStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.map(v => String(v).trim()).filter(Boolean) : []
+  } catch {
+    return parseGoldenSources(raw)
+  }
 }
 
 /**
