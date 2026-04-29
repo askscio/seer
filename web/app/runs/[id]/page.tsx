@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import ResultsTable from '@/components/ResultsTable'
 import JudgeMethodology from '@/components/JudgeMethodology'
+import DownloadResultsButton from '@/components/DownloadResultsButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -163,7 +164,16 @@ export default async function RunResults({ params }: { params: { id: string } })
 
       {/* Results Table */}
       <div className="bg-white rounded-lg shadow-card border border-border p-5">
-        <h2 className="text-sm font-medium text-cement uppercase tracking-wide mb-4">Test Case Results</h2>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-sm font-medium text-cement uppercase tracking-wide">Test Case Results</h2>
+          <DownloadResultsButton
+            runId={runData.id}
+            evalSetId={runData.evalSetId}
+            evalSetName={runData.evalSetName}
+            completedAt={runData.completedAt}
+            results={runData.results}
+          />
+        </div>
         <ResultsTable results={runData.results} />
       </div>
 

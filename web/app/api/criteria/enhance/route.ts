@@ -69,7 +69,7 @@ Now write the rubric for "${name}". Be specific to this dimension — don't writ
       },
       body: JSON.stringify({
         messages: [{ fragments: [{ text: prompt }] }],
-        agentConfig: { agent: 'DEFAULT', modelSetId: 'OPUS_4_6_VERTEX' },
+        agentConfig: { agent: 'DEFAULT', modelSetId: 'GPT_5' },
         saveChat: false,
         timeoutMillis: 30000,
       }),

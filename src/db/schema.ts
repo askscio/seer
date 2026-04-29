@@ -22,6 +22,8 @@ export const evalCases = sqliteTable('eval_cases', {
   evalSetId: text('eval_set_id').notNull().references(() => evalSets.id),
   query: text('query').notNull(),
   evalGuidance: text('eval_guidance'),
+  goldenAnswer: text('golden_answer'),
+  goldenSources: text('golden_sources'), // JSON array of URLs
   context: text('context'),
   metadata: text('metadata'), // JSON
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull()
