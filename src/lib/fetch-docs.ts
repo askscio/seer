@@ -53,6 +53,21 @@ export async function fetchSourceDocContent(
 }
 
 /**
+ * Fetch source document content directly from known URLs.
+ * Used by golden-benchmark evaluation where case rows include source links.
+ */
+export async function fetchSourceDocContentByUrls(urls: string[]): Promise<SourceDoc[]> {
+  if (!urls || urls.length === 0) return []
+
+  const docs = urls
+    .map(url => ({ title: url, url }))
+    .filter((d, i, arr) => arr.findIndex(x => x.url === d.url) === i)
+
+  if (docs.length === 0) return []
+  return fetchDocsByUrl(docs)
+}
+
+/**
  * Fetch document content by URL using the getdocuments API.
  * Single batch call — no search federation, no Slack rate limits.
  */

@@ -36,6 +36,8 @@ export interface EvalCase {
   id: string
   query: string
   evalGuidance?: string  // Optional thematic guidance for coverage judge
+  goldenAnswer?: string  // Optional golden answer for benchmark accuracy/completeness
+  goldenSources?: string[]  // Optional source URLs used for golden-answer verification
   context?: string  // Additional context for judge
   metadata?: Record<string, any>
 }

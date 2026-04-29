@@ -82,7 +82,7 @@ export default function EvalConfigSection({ evalSetId, hasCases, agentType }: Ev
   const [customCriteria, setCustomCriteria] = useState<string[]>([
     'topical_coverage', 'groundedness',
   ])
-  const [selectedJudges, setSelectedJudges] = useState<string[]>(['OPUS_4_6_VERTEX'])
+  const [selectedJudges, setSelectedJudges] = useState<string[]>(['GPT_5'])
   const [multiTurnEnabled, setMultiTurnEnabled] = useState(false)
   const [maxTurns, setMaxTurns] = useState(5)
   const [running, setRunning] = useState(false)

@@ -17,7 +17,7 @@ export interface CriterionDefinition {
   description: string
   rubric: string
   scoreType: 'binary' | 'categorical' | 'metric'
-  judgeCall: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'metric' | 'custom'
+  judgeCall: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'golden' | 'metric' | 'custom'
   scaleConfig?: {
     categories?: string[]
     categoryValues?: Record<string, number>  // Map categories to numeric values for aggregation
@@ -55,6 +55,65 @@ export const DEFAULT_CRITERIA: CriterionDefinition[] = [
 The eval guidance describes themes to cover, not exact text to match. Different wording, structure, and additional correct information are acceptable.`,
     scoreType: 'categorical',
     judgeCall: 'coverage',
+    scaleConfig: { categories: QUALITY_CATEGORIES, categoryValues: QUALITY_VALUES },
+    weight: 1.0,
+  },
+
+  {
+    id: 'answer_accuracy',
+    name: 'Answer Accuracy',
+    description: 'Are the response claims accurate against the provided golden answer and sources?',
+    rubric: `Use the golden answer and golden sources as the reference. Check factual and semantic correctness of substantive claims in the response:
+
+- full: All key claims are accurate and consistent with the golden answer/sources.
+- substantial: Mostly accurate; minor imprecision that does not change the core meaning.
+- partial: Mix of accurate and inaccurate/imprecise claims; user would need corrections.
+- minimal: Multiple incorrect or contradictory claims relative to golden references.
+- failure: Core answer is wrong, contradictory, or unrelated to golden references.
+
+Allow wording differences, but do not allow factual contradictions.`,
+    scoreType: 'categorical',
+    judgeCall: 'golden',
+    scaleConfig: { categories: QUALITY_CATEGORIES, categoryValues: QUALITY_VALUES },
+    weight: 1.0,
+  },
+
+  {
+    id: 'answer_completeness',
+    name: 'Answer Completeness',
+    description: 'Does the response cover the required claims from the golden answer?',
+    rubric: `Decompose the golden answer into required claims/themes, then assess whether the response covers them:
+
+- full: Covers all required claims with sufficient detail.
+- substantial: Covers most required claims (about 75%+), minor omissions only.
+- partial: Covers around half the required claims; notable gaps remain.
+- minimal: Mentions only a few required claims with limited substance.
+- failure: Misses most required claims or fails to answer the question.
+
+Do not require exact phrasing; evaluate coverage of required substance.`,
+    scoreType: 'categorical',
+    judgeCall: 'golden',
+    scaleConfig: { categories: QUALITY_CATEGORIES, categoryValues: QUALITY_VALUES },
+    weight: 1.0,
+  },
+
+  {
+    id: 'citation_correctness',
+    name: 'Citation Correctness',
+    description: 'Did the agent cite or rely on the correct source(s) compared to the golden source list?',
+    rubric: `Compare the URLs the agent actually cited or read (agent_cited_sources / agent_retrieved_sources, when provided) against the golden_sources list.
+
+Citation correctness is NOT strict URL match. Allow partial credit when the agent cites a different version, a parent folder, or a closely related authoritative document. Penalize unrelated sources, missing citations, or citations from non-authoritative origins.
+
+- full: Agent cites at least one golden source URL exactly, OR cites the same authoritative document via an equivalent URL (e.g., same SharePoint doc, different version/anchor) and no clearly wrong sources.
+- substantial: Agent cites a closely related document from the same authoritative location/site/folder (e.g., same SharePoint site or same process area) — directionally correct source.
+- partial: Agent cites a related but secondary source (different doc but topically related to the golden source), or cites the right source alongside several unrelated ones.
+- minimal: Agent cites unrelated sources, or no clear citation overlap with the golden source.
+- failure: Agent cites contradictory / wrong / non-authoritative sources, or no sources at all when the golden answer requires sourcing.
+
+If no agent_cited_sources or agent_retrieved_sources are provided, fall back to checking whether the response text itself references or quotes the golden source's content.`,
+    scoreType: 'categorical',
+    judgeCall: 'golden',
     scaleConfig: { categories: QUALITY_CATEGORIES, categoryValues: QUALITY_VALUES },
     weight: 1.0,
   },
@@ -174,7 +233,9 @@ export function getCriterion(id: string): CriterionDefinition | undefined {
   return DEFAULT_CRITERIA.find(c => c.id === id)
 }
 
-export function getCriteriaByCall(call: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'metric'): CriterionDefinition[] {
+export function getCriteriaByCall(
+  call: 'coverage' | 'quality' | 'faithfulness' | 'factuality' | 'golden' | 'metric'
+): CriterionDefinition[] {
   return DEFAULT_CRITERIA.filter(c => c.judgeCall === call)
 }
 
