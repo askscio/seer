@@ -17,6 +17,8 @@ import type { CriterionDefinition } from '../criteria/defaults'
 import type { JudgeScore, AgentResult, ConversationTurn } from '../types'
 import { extractMetric } from './metrics'
 import { fetchSourceDocContent, type SourceDoc } from './fetch-docs'
+import { fetchWithRetry } from './retry'
+import { tokenLedger } from './token-ledger'
 
 /**
  * Format an agent's output for judging.
@@ -536,54 +538,102 @@ function aggregateScores(
 
 // ===== LLM call helpers =====
 
-async function callJudge(prompt: string, modelSetId: string): Promise<string> {
-  const resp = await fetch(`${config.gleanBackend}/rest/api/v1/chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.gleanApiKey}`,
+async function callJudge(prompt: string, modelSetId: string, scope = 'judge'): Promise<string> {
+  const start = Date.now()
+  const resp = await fetchWithRetry(
+    `${config.gleanBackend}/rest/api/v1/chat`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.gleanApiKey}`,
+      },
+      body: JSON.stringify({
+        messages: [{ fragments: [{ text: prompt }] }],
+        agentConfig: { agent: 'DEFAULT', modelSetId },
+        saveChat: false,
+        timeoutMillis: 120000,
+      }),
+      signal: AbortSignal.timeout(130_000),
     },
-    body: JSON.stringify({
-      messages: [{ fragments: [{ text: prompt }] }],
-      agentConfig: { agent: 'DEFAULT', modelSetId },
-      saveChat: false,
-      timeoutMillis: 120000,
-    }),
-  })
+    { label: `judge:${modelSetId}:${scope}` },
+  )
 
   if (!resp.ok) {
     const err = await resp.text()
+    tokenLedger.record({
+      scope,
+      model: modelSetId,
+      promptText: prompt,
+      responseText: err,
+      latencyMs: Date.now() - start,
+      status: 'failed',
+      error: `${resp.status} ${resp.statusText}`,
+    })
     throw new Error(`Judge (${modelSetId}) error: ${resp.status} - ${err}`)
   }
 
-  return extractContent(await resp.json() as GleanResponse)
+  const text = extractContent(await resp.json() as GleanResponse)
+  tokenLedger.record({
+    scope,
+    model: modelSetId,
+    promptText: prompt,
+    responseText: text,
+    latencyMs: Date.now() - start,
+    status: 'ok',
+  })
+  return text
 }
 
-async function callJudgeWithTools(prompt: string, modelSetId: string): Promise<string> {
-  const resp = await fetch(`${config.gleanBackend}/rest/api/v1/chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.gleanApiKey}`,
-    },
-    body: JSON.stringify({
-      messages: [{ fragments: [{ text: prompt }] }],
-      agentConfig: {
-        agent: 'ADVANCED',
-        modelSetId,
-        toolSets: { enableCompanyTools: true },
+async function callJudgeWithTools(prompt: string, modelSetId: string, scope = 'judge:factuality'): Promise<string> {
+  const start = Date.now()
+  const resp = await fetchWithRetry(
+    `${config.gleanBackend}/rest/api/v1/chat`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.gleanApiKey}`,
       },
-      saveChat: false,
-      timeoutMillis: 120000,
-    }),
-  })
+      body: JSON.stringify({
+        messages: [{ fragments: [{ text: prompt }] }],
+        agentConfig: {
+          agent: 'ADVANCED',
+          modelSetId,
+          toolSets: { enableCompanyTools: true },
+        },
+        saveChat: false,
+        timeoutMillis: 120000,
+      }),
+      signal: AbortSignal.timeout(130_000),
+    },
+    { label: `judge-tools:${modelSetId}:${scope}` },
+  )
 
   if (!resp.ok) {
     const err = await resp.text()
+    tokenLedger.record({
+      scope,
+      model: modelSetId,
+      promptText: prompt,
+      responseText: err,
+      latencyMs: Date.now() - start,
+      status: 'failed',
+      error: `${resp.status} ${resp.statusText}`,
+    })
     throw new Error(`Judge factuality (${modelSetId}) error: ${resp.status} - ${err}`)
   }
 
-  return extractContent(await resp.json() as GleanResponse)
+  const text = extractContent(await resp.json() as GleanResponse)
+  tokenLedger.record({
+    scope,
+    model: modelSetId,
+    promptText: prompt,
+    responseText: text,
+    latencyMs: Date.now() - start,
+    status: 'ok',
+  })
+  return text
 }
 
 // Content extraction delegated to shared extract-content.ts
